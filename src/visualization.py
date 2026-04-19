@@ -13,7 +13,7 @@ import os
 FIGURES_DIR = "results/figures"
 os.makedirs(FIGURES_DIR, exist_ok=True)
 
-PALETTE = {"Neural Tree": "#2196F3", "Random Forest": "#4CAF50", "XGBoost": "#FF9800"}
+PALETTE = {"Neural Tree": "#2196F3", "Random Forest": "#4CAF50", "Gradient Boosting": "#FF9800"}
 
 
 def _save(fig, name: str):
@@ -28,7 +28,7 @@ def plot_rul_comparison(y_test, results: dict, max_samples: int = 100):
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     fig.suptitle("Predicted vs True RUL — Model Comparison", fontsize=13, fontweight="bold")
 
-    models = ["Neural Tree", "Random Forest", "XGBoost"]
+    models = ["Neural Tree", "Random Forest", "Gradient Boosting"]
     idx = np.arange(min(max_samples, len(y_test)))
 
     for ax, name in zip(axes, models):
@@ -52,7 +52,7 @@ def plot_rul_comparison(y_test, results: dict, max_samples: int = 100):
 
 def plot_metrics_bar(results: dict):
     """Fig 2: Bar chart comparing RMSE, MAE, R² across models."""
-    models = ["Neural Tree", "Random Forest", "XGBoost"]
+    models = ["Neural Tree", "Random Forest", "Gradient Boosting"]
     metrics = ["RMSE", "MAE", "R2"]
     n_metrics = len(metrics)
 
@@ -92,8 +92,8 @@ def plot_noise_robustness(noise_df: pd.DataFrame):
                 label="Neural Tree", linewidth=2)
         ax.plot(x, noise_df[rf_col], "s--", color=PALETTE["Random Forest"],
                 label="Random Forest", linewidth=2)
-        ax.plot(x, noise_df[xgb_col], "^:", color=PALETTE["XGBoost"],
-                label="XGBoost", linewidth=2)
+        ax.plot(x, noise_df[xgb_col], "^:", color=PALETTE["Gradient Boosting"],
+                label="Gradient Boosting", linewidth=2)
         ax.set_xlabel("Noise σ")
         ax.set_ylabel(label)
         ax.set_title(f"{label} vs Noise Level")
@@ -120,8 +120,8 @@ def plot_missing_sensor_robustness(missing_df: pd.DataFrame):
                 label="Neural Tree", linewidth=2)
         ax.plot(x, missing_df[rf_col], "s--", color=PALETTE["Random Forest"],
                 label="Random Forest", linewidth=2)
-        ax.plot(x, missing_df[xgb_col], "^:", color=PALETTE["XGBoost"],
-                label="XGBoost", linewidth=2)
+        ax.plot(x, missing_df[xgb_col], "^:", color=PALETTE["Gradient Boosting"],
+                label="Gradient Boosting", linewidth=2)
         ax.set_xlabel("Missing Sensors (%)")
         ax.set_ylabel(label)
         ax.set_title(f"{label} vs Missing Sensor Ratio")
@@ -167,7 +167,7 @@ def plot_rul_scatter(y_test, results: dict):
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
     fig.suptitle("True RUL vs Predicted RUL", fontsize=13, fontweight="bold")
 
-    for ax, name in zip(axes, ["Neural Tree", "Random Forest", "XGBoost"]):
+    for ax, name in zip(axes, ["Neural Tree", "Random Forest", "Gradient Boosting"]):
         preds = results[name]["predictions"]
         ax.scatter(y_test, preds, alpha=0.4, s=8, color=PALETTE[name])
         lims = [min(y_test.min(), preds.min()), max(y_test.max(), preds.max())]

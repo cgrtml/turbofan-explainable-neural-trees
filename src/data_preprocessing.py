@@ -105,6 +105,83 @@ def prepare_features(train_df: pd.DataFrame, test_df: pd.DataFrame,
     return X_train, y_train, X_test, y_test, scaler
 
 
+def load_cmapss_sequences(dataset: str = 'FD001', data_dir: str = 'data',
+                          seq_len: int = 30):
+    """Load CMAPSS as fixed-length sequences for LSTM training.
+
+    Returns:
+        X_train_seq: (N_train, seq_len, n_features)
+        y_train:     (N_train,)
+        X_test_seq:  (N_test,  seq_len, n_features)  — one per engine
+        y_test:      (N_test,)
+        scaler:      fitted MinMaxScaler
+    """
+    col_names = ["unit_id", "time_cycle"] + OP_COLS + SENSOR_COLS
+
+    train_df  = pd.read_csv(os.path.join(data_dir, f"train_{dataset}.txt"),
+                            sep=r"\s+", header=None, names=col_names)
+    test_df   = pd.read_csv(os.path.join(data_dir, f"test_{dataset}.txt"),
+                            sep=r"\s+", header=None, names=col_names)
+    rul_df    = pd.read_csv(os.path.join(data_dir, f"RUL_{dataset}.txt"),
+                            sep=r"\s+", header=None, names=["RUL"])
+
+    train_df  = _compute_rul(train_df)
+    test_full = _compute_test_rul_full(test_df, rul_df)
+
+    scaler = MinMaxScaler()
+    scaler.fit(train_df[USEFUL_FEATURES].values)
+
+    X_tr, y_tr = _make_sequences(train_df, scaler, seq_len)
+    X_te, y_te = _make_test_sequences(test_full, scaler, seq_len)
+
+    return X_tr, y_tr, X_te, y_te, scaler
+
+
+def _compute_test_rul_full(test_df: pd.DataFrame,
+                            rul_df: pd.DataFrame) -> pd.DataFrame:
+    """Assign a RUL value to every row in the raw test file."""
+    parts = []
+    for idx, (uid, grp) in enumerate(test_df.groupby("unit_id", sort=True)):
+        grp = grp.copy().sort_values("time_cycle").reset_index(drop=True)
+        true_rul = float(rul_df.iloc[idx]["RUL"])
+        max_t    = grp["time_cycle"].max()
+        grp["RUL"] = (max_t - grp["time_cycle"]) + true_rul
+        grp["RUL"] = grp["RUL"].clip(upper=MAX_RUL)
+        parts.append(grp)
+    return pd.concat(parts, ignore_index=True)
+
+
+def _make_sequences(df: pd.DataFrame, scaler, seq_len: int):
+    seqs, tgts = [], []
+    for uid in df["unit_id"].unique():
+        eng  = df[df["unit_id"] == uid].sort_values("time_cycle")
+        feat = scaler.transform(eng[USEFUL_FEATURES].values).astype(np.float32)
+        ruls = eng["RUL"].values.astype(np.float32)
+        for i in range(len(feat)):
+            s = max(0, i - seq_len + 1)
+            seq = feat[s: i + 1]
+            if len(seq) < seq_len:
+                pad = np.zeros((seq_len - len(seq), feat.shape[1]), dtype=np.float32)
+                seq = np.vstack([pad, seq])
+            seqs.append(seq)
+            tgts.append(ruls[i])
+    return np.array(seqs, dtype=np.float32), np.array(tgts, dtype=np.float32)
+
+
+def _make_test_sequences(df: pd.DataFrame, scaler, seq_len: int):
+    seqs, tgts = [], []
+    for uid in df["unit_id"].unique():
+        eng  = df[df["unit_id"] == uid].sort_values("time_cycle")
+        feat = scaler.transform(eng[USEFUL_FEATURES].values).astype(np.float32)
+        seq  = feat[-seq_len:]
+        if len(seq) < seq_len:
+            pad = np.zeros((seq_len - len(seq), feat.shape[1]), dtype=np.float32)
+            seq = np.vstack([pad, seq])
+        seqs.append(seq)
+        tgts.append(float(eng["RUL"].values[-1]))
+    return np.array(seqs, dtype=np.float32), np.array(tgts, dtype=np.float32)
+
+
 def add_gaussian_noise(X: np.ndarray, noise_std: float = 0.05,
                        seed: int = 42) -> np.ndarray:
     """Add Gaussian noise to simulate sensor degradation."""

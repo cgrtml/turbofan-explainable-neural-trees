@@ -194,7 +194,7 @@ if page == "🏠 Overview":
     st.markdown("""
     <div class="hero-banner">
         <h1>Temporal Neural Trees for Turbofan Engine RUL Prediction</h1>
-        <p>GRU sequence encoder + soft decision trees + calibrated uncertainty — robust to sensor failure.</p>
+        <p>GRU sequence encoder with soft decision trees, calibrated uncertainty, and robustness to sensor failure.</p>
         <br>
         <span class="badge">GRU Encoder</span>
         <span class="badge">Soft Decision Trees</span>
@@ -211,7 +211,7 @@ if page == "🏠 Overview":
         <img src="https://www.nasa.gov/wp-content/themes/nasa/assets/images/nasa-logo.svg"
              height="48" style="flex-shrink:0"/>
         <div>
-            <b style="font-size:0.95rem">Dataset: NASA CMAPSS — Commercial Modular Aero-Propulsion System Simulation</b><br>
+            <b style="font-size:0.95rem">Dataset: NASA CMAPSS (Commercial Modular Aero-Propulsion System Simulation)</b><br>
             <span style="font-size:0.82rem;color:#555">
             100 turbofan engines run to failure under one operating condition (FD001 subset).
             Sensors: 21 channels measuring temperatures, pressures, fan speeds, and fuel flow.
@@ -247,10 +247,10 @@ if page == "🏠 Overview":
         st.markdown("""
         **Three improvements over vanilla Neural Trees:**
 
-        1. **GRU Encoder** processes 30-cycle sequences (same as LSTM) — closes the accuracy gap
+        1. **GRU Encoder** processes 30-cycle sequences (same as LSTM), which closes the accuracy gap
         2. **Channel-level Sensor Dropout** zeros entire sensor channels during training,
            teaching the model to function without any given sensor
-        3. **Leaf-level Gaussian Uncertainty** — each tree leaf outputs mean + variance,
+        3. **Leaf-level Gaussian Uncertainty:** each tree leaf outputs a mean and variance,
            combined into calibrated prediction intervals. No Monte Carlo sampling needed.
 
         **Key result:** At 30% missing sensors, TNT degrades only ~13% while LSTM degrades ~117%.
@@ -305,7 +305,7 @@ from the NASA CMAPSS FD001 test set.
 - **RUL** = how many more operating cycles the engine can run before failure. 1 cycle ≈ one flight.
 - **Engine 1–100** = individual test engines. Each has a known true RUL (ground truth) used to measure prediction accuracy.
 - **Critical / Caution / Healthy** = fleet-level status based on predicted RUL thresholds (<40, 40–80, >80 cycles).
-- **95% confidence interval** = TNT's uncertainty estimate. A wider band means the model is less certain — e.g. under sensor failure.
+- **95% confidence interval** = TNT's uncertainty estimate. A wider band means the model is less certain (e.g. under sensor failure).
 - **Noise σ / Missing sensors** = sliders to simulate degraded sensor conditions and see how each model responds.
     """)
     st.markdown("---")
@@ -418,7 +418,7 @@ elif page == "🌊 Robustness Test":
 
     with tab1:
         st.subheader("RMSE vs Missing Sensor Channels")
-        st.caption("Entire channels zeroed — simulates complete sensor failure.")
+        st.caption("Entire channels zeroed; simulates complete sensor failure.")
 
         miss_ratios = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
         tnt_m, lstm_m, vnt_m, rf_m = [], [], [], []
@@ -462,7 +462,7 @@ elif page == "🌊 Robustness Test":
 
     with tab2:
         st.subheader("RMSE vs Gaussian Noise Level")
-        st.caption("Independent per-timestep noise — LSTM's temporal averaging helps here.")
+        st.caption("Independent per-timestep noise. LSTM's temporal averaging helps here.")
 
         sigmas = [0.0, 0.02, 0.05, 0.10, 0.15, 0.20]
         tnt_n, lstm_n, vnt_n, rf_n = [], [], [], []
@@ -514,7 +514,7 @@ elif page == "📊 Model Comparison":
         "Random Forest":      m_rf,
     }).T.round(3)
 
-    st.subheader("Baseline Metrics — CMAPSS FD001")
+    st.subheader("Baseline Metrics on CMAPSS FD001")
     st.dataframe(
         df_m.style
             .highlight_min(subset=['RMSE','MAE','NASA'], color='#c8e6c9')
@@ -648,7 +648,7 @@ elif page == "🔍 Feature Importance":
     st.markdown("""
     Importance is computed by backpropagating through the full GRU encoder + tree ensemble
     and measuring mean absolute gradient with respect to each input channel, averaged over
-    all timesteps. No post-hoc approximation — this reflects the model's actual sensitivity.
+    all timesteps. No post-hoc approximation; this reflects the model's actual sensitivity.
     """)
     st.markdown("---")
 
@@ -673,7 +673,7 @@ elif page == "🔍 Feature Importance":
             st.markdown(f"**{row['Feature']}**: `{pct:.1f}%`")
             st.progress(float(row['Importance']) / float(imp_df['Importance'].max()))
         st.markdown("---")
-        st.info("High-pressure turbine sensors (s11, s4, s12) dominate — consistent with "
+        st.info("High-pressure turbine sensors (s11, s4, s12) dominate, consistent with "
                 "the known CMAPSS fault mode where HPT components degrade first.")
 
     st.markdown("---")

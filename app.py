@@ -75,6 +75,25 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     text-transform: uppercase; color: #5c6bc0; margin-bottom: 6px;
 }
 .unc-band { background: #e3f2fd; border-radius: 8px; padding: 12px 16px; margin-top: 8px; }
+.stat-card-v2 {
+    background: linear-gradient(135deg, #1a237e, #1565c0);
+    border-radius: 14px; padding: 22px 18px; text-align: center; color: white;
+    height: 100%; box-sizing: border-box;
+}
+.stat-card-v2 .num { font-size: 2.4rem; font-weight: 700; line-height: 1.1; }
+.stat-card-v2 .lbl { font-size: 0.78rem; font-weight: 600; opacity: 0.75;
+                     margin-top: 4px; text-transform: uppercase; letter-spacing: 0.8px; }
+.stat-card-v2 .sub { font-size: 0.78rem; opacity: 0.85; margin-top: 8px; line-height: 1.4; }
+.stat-card-v2 .tag { display: inline-block; background: rgba(255,255,255,0.18);
+                     border-radius: 20px; padding: 3px 10px; font-size: 0.7rem; margin-top: 8px; }
+.info-box {
+    background: #f0f4ff; border-radius: 12px; padding: 18px 22px;
+    border: 1px solid #dde3f5; margin-bottom: 20px;
+}
+.guide-step {
+    background: #f8f9ff; border-radius: 10px; padding: 14px 18px;
+    border-left: 4px solid #5c6bc0; margin-bottom: 10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -191,10 +210,13 @@ rf_pred             = rf.predict(X_test)
 # PAGE 1: Overview
 # ══════════════════════════════════════════════════════════════════════════════
 if page == "🏠 Overview":
+
+    # Hero
     st.markdown("""
     <div class="hero-banner">
         <h1>Temporal Neural Trees for Turbofan Engine RUL Prediction</h1>
-        <p>GRU sequence encoder with soft decision trees, calibrated uncertainty, and robustness to sensor failure.</p>
+        <p>A research system that predicts how many flight cycles remain before a turbofan engine fails,
+           with calibrated uncertainty and resilience to sensor outages.</p>
         <br>
         <span class="badge">GRU Encoder</span>
         <span class="badge">Soft Decision Trees</span>
@@ -204,91 +226,150 @@ if page == "🏠 Overview":
     </div>
     """, unsafe_allow_html=True)
 
-    # NASA attribution
+    # NASA attribution row
     st.markdown("""
-    <div style="display:flex;align-items:center;gap:16px;background:#f0f4ff;
-                border-radius:10px;padding:12px 20px;margin-bottom:8px;border:1px solid #dde3f5">
-        <img src="https://www.nasa.gov/wp-content/themes/nasa/assets/images/nasa-logo.svg"
-             height="48" style="flex-shrink:0"/>
-        <div>
-            <b style="font-size:0.95rem">Dataset: NASA CMAPSS (Commercial Modular Aero-Propulsion System Simulation)</b><br>
-            <span style="font-size:0.82rem;color:#555">
-            100 turbofan engines run to failure under one operating condition (FD001 subset).
-            Sensors: 21 channels measuring temperatures, pressures, fan speeds, and fuel flow.
-            Ground-truth RUL labels provided by NASA Prognostics Center of Excellence.
+    <div style="display:flex;align-items:center;gap:18px;background:#f0f4ff;
+                border-radius:12px;padding:14px 22px;margin-bottom:24px;border:1px solid #dde3f5">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/e/e5/NASA_logo.svg"
+             height="52" style="flex-shrink:0"/>
+        <div style="border-left:1px solid #c5cae9;padding-left:18px">
+            <b style="font-size:0.95rem;color:#1a237e">
+                Data source: NASA CMAPSS — Commercial Modular Aero-Propulsion System Simulation
+            </b><br>
+            <span style="font-size:0.82rem;color:#555;line-height:1.6">
+                100 simulated turbofan engines, each run until failure under a single operating condition (FD001 subset).
+                21 onboard sensors record temperatures, pressures, fan speeds, and fuel flow every flight cycle.
+                NASA provides the true Remaining Useful Life for each engine, which is used to train and evaluate the model.
             </span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    m_tnt = get_metrics(y_te_seq, tnt_pred)
+    # Stat cards
+    m_tnt  = get_metrics(y_te_seq, tnt_pred)
     m_lstm = get_metrics(y_te_seq, lstm_pred)
 
+    st.markdown('<div class="section-label" style="margin-bottom:10px">Key Results</div>',
+                unsafe_allow_html=True)
+
     c1, c2, c3, c4, c5 = st.columns(5)
-    for col, num, lbl in [
-        (c1, f"{m_tnt['RMSE']:.2f}", "TNT RMSE (cycles)"),
-        (c2, f"{m_lstm['RMSE']:.2f}", "LSTM RMSE (cycles)"),
-        (c3, f"{m_tnt['R²']:.3f}", "TNT R²"),
-        (c4, "30%", "Sensor Failure"),
-        (c5, "Yes", "Uncertainty Output"),
-    ]:
+    cards = [
+        (c1, f"{m_tnt['RMSE']:.2f}", "TNT Prediction Error",
+         "Average error across 100 engines, in flight cycles",
+         "Lower is better — state-of-the-art range: 13–20 cycles"),
+        (c2, f"{m_lstm['RMSE']:.2f}", "LSTM Prediction Error",
+         "Standard deep-learning baseline for comparison",
+         "TNT is slightly less accurate on clean data"),
+        (c3, f"{m_tnt['R²']:.3f}", "TNT Fit Quality (R²)",
+         "Fraction of RUL variance explained by the model",
+         "1.0 = perfect; 0.85 means strong predictive power"),
+        (c4, "30%", "Sensor Failure Resilience",
+         "TNT stays accurate even when 30% of sensors are lost",
+         "LSTM error nearly doubles under same conditions"),
+        (c5, "Yes", "Uncertainty Output",
+         "Every prediction includes a confidence interval",
+         "Wider band = model is less certain"),
+    ]
+    for col, num, lbl, sub, tag in cards:
         col.markdown(f"""
-        <div class="stat-card">
+        <div class="stat-card-v2">
             <div class="num">{num}</div>
             <div class="lbl">{lbl}</div>
+            <div class="sub">{sub}</div>
+            <div class="tag">{tag}</div>
         </div>""", unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
+    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
+
+    # Two-column: Architecture + Chart
+    col1, col2 = st.columns([1, 1], gap="large")
 
     with col1:
-        st.markdown('<div class="section-label">Architecture</div>', unsafe_allow_html=True)
-        st.subheader("Temporal Neural Tree")
+        st.markdown('<div class="section-label">How the Model Works</div>', unsafe_allow_html=True)
+        st.markdown("#### Temporal Neural Tree (TNT)")
         st.markdown("""
-        **Three improvements over vanilla Neural Trees:**
+        A standard LSTM learns patterns across time but has no mechanism for handling
+        missing data and gives no uncertainty estimates. TNT adds three things:
 
-        1. **GRU Encoder** processes 30-cycle sequences (same as LSTM), which closes the accuracy gap
-        2. **Channel-level Sensor Dropout** zeros entire sensor channels during training,
-           teaching the model to function without any given sensor
-        3. **Leaf-level Gaussian Uncertainty:** each tree leaf outputs a mean and variance,
-           combined into calibrated prediction intervals. No Monte Carlo sampling needed.
-
-        **Key result:** At 30% missing sensors, TNT degrades only ~13% while LSTM degrades ~117%.
+        1. **GRU Encoder** — reads the last 30 flight cycles as a sequence, matching LSTM accuracy
+        2. **Channel-level Sensor Dropout** — randomly zeros entire sensor channels during training,
+           so the model learns to predict even when sensors go offline
+        3. **Leaf-level Uncertainty** — each decision-tree leaf outputs a mean and a variance,
+           giving calibrated confidence intervals without Monte Carlo sampling
         """)
         st.markdown("""
-        <div class="nasa-card" style="margin-top:12px">
+        <div class="info-box" style="margin-top:4px">
         <b>Why not just use LSTM?</b><br>
-        <span style="font-size:0.88rem;color:#444">
-        LSTM is more accurate on clean data but catastrophically brittle when sensor channels
-        fail completely. It interprets zeroed channels as extreme out-of-distribution readings,
-        corrupting all subsequent hidden states. TNT's channel-level dropout training makes it
-        immune to this failure mode. Additionally, LSTM provides no uncertainty estimates and no
-        interpretable feature importance.
+        <span style="font-size:0.86rem;color:#444;line-height:1.6">
+        LSTM is slightly more accurate on perfect sensor data, but it has no training signal for
+        missing channels. When a sensor fails, it treats the zeroed value as an extreme reading
+        and corrupts all subsequent predictions. TNT's dropout training makes it resilient to
+        this failure mode. It also outputs confidence intervals, which LSTM cannot.
         </span>
         </div>
         """, unsafe_allow_html=True)
 
     with col2:
-        st.markdown('<div class="section-label">Live Sensor Data</div>', unsafe_allow_html=True)
-        st.subheader("Engine #1 Degradation")
+        st.markdown('<div class="section-label">Live Sensor Degradation — Engine 1</div>',
+                    unsafe_allow_html=True)
+        st.markdown("#### How sensor readings change over time")
+        st.markdown(
+            "<span style='font-size:0.82rem;color:#555'>"
+            "Three key sensors from a real training-set engine, normalized to [0,1]. "
+            "Drift and trend over flight cycles is the signal the model learns from."
+            "</span>",
+            unsafe_allow_html=True
+        )
         engine_1 = train_df[train_df['unit_id'] == 1].copy()
         fig = go.Figure()
-        for sensor, color, label in [
-            ('s4',  '#1565c0', 's4 — HPC Outlet Temp'),
-            ('s11', '#2e7d32', 's11 — Bypass Ratio'),
-            ('s12', '#e65100', 's12 — Burner Fuel-Air'),
-        ]:
+        sensor_info = [
+            ('s4',  '#1565c0', 's4 (HPC Outlet Temp)'),
+            ('s11', '#2e7d32', 's11 (Bypass Ratio)'),
+            ('s12', '#e65100', 's12 (Burner Fuel-Air Ratio)'),
+        ]
+        for sensor, color, label in sensor_info:
             vals = engine_1[sensor]
             norm = (vals - vals.min()) / (vals.max() - vals.min() + 1e-8)
             fig.add_trace(go.Scatter(x=engine_1['time_cycle'], y=norm,
                                      name=label, line=dict(color=color, width=2)))
-        fig.update_layout(xaxis_title="Flight Cycle", yaxis_title="Normalized Value",
-                          height=300, margin=dict(t=10,b=10),
-                          legend=dict(orientation='h', y=-0.3))
+        fig.update_layout(
+            xaxis_title="Flight Cycle (each cycle = one flight)",
+            yaxis_title="Normalized sensor value",
+            height=310, margin=dict(t=10, b=10, l=10, r=10),
+            legend=dict(orientation='h', y=-0.32),
+            plot_bgcolor='#fafbff', paper_bgcolor='#fafbff'
+        )
         st.plotly_chart(fig, use_container_width=True)
 
+    st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
     st.markdown("---")
-    st.markdown('[GitHub Repository](https://github.com/cgrtml/turbofan-explainable-neural-trees)')
+
+    # How to explore guide
+    st.markdown("#### How to explore this app")
+    guide_cols = st.columns(3)
+    steps = [
+        ("🔮 RUL Prediction",
+         "Pick an engine (1–100) and see how each model estimates its remaining life. "
+         "Use the sliders to simulate sensor noise or failure and watch how predictions change."),
+        ("🌊 Robustness Test",
+         "See how RMSE changes as more sensors fail or noise increases. "
+         "This is the core finding: TNT degrades gracefully; LSTM does not."),
+        ("🎯 Uncertainty",
+         "Each TNT prediction comes with a confidence interval. "
+         "This page shows whether those intervals are well-calibrated."),
+    ]
+    for col, (title, desc) in zip(guide_cols, steps):
+        col.markdown(f"""
+        <div class="guide-step">
+            <b style="font-size:0.92rem">{title}</b><br>
+            <span style="font-size:0.82rem;color:#444;line-height:1.5">{desc}</span>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown(
+        '<br><a href="https://github.com/cgrtml/turbofan-explainable-neural-trees" '
+        'class="github-btn">GitHub Repository</a>',
+        unsafe_allow_html=True
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

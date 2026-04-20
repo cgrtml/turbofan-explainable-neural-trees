@@ -10,7 +10,7 @@
 
 ## What this is
 
-This project predicts **Remaining Useful Life (RUL)** — the number of flight cycles left before a turbofan engine fails — using a novel model called the **Temporal Neural Tree (TNT)**.
+This project predicts **Remaining Useful Life (RUL)**  the number of flight cycles left before a turbofan engine fails  using a novel model called the **Temporal Neural Tree (TNT)**.
 
 Standard deep-learning baselines (LSTM) are accurate on clean data but degrade severely when sensors fail. TNT combines a GRU sequence encoder with an ensemble of soft decision trees trained with channel-level sensor dropout, making it substantially more robust to missing sensor data while also providing calibrated uncertainty estimates.
 

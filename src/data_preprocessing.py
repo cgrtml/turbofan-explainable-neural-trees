@@ -196,7 +196,9 @@ def simulate_missing_sensors(X: np.ndarray, missing_ratio: float = 0.2,
     rng = np.random.default_rng(seed)
     X_missing = X.copy()
     n_features = X.shape[1]
-    n_missing = max(1, int(n_features * missing_ratio))
+    n_missing = int(n_features * missing_ratio)
+    if n_missing == 0:
+        return X_missing, np.array([], dtype=int)
     missing_idx = rng.choice(n_features, n_missing, replace=False)
     X_missing[:, missing_idx] = 0.0
     return X_missing, missing_idx

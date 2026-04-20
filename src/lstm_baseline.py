@@ -81,8 +81,10 @@ def apply_missing_to_sequences(X_seq: np.ndarray, missing_ratio: float,
     rng   = np.random.default_rng(seed)
     X_m   = X_seq.copy()
     n_feat = X_seq.shape[2]
-    n_drop = max(1, int(n_feat * missing_ratio))
-    idx    = rng.choice(n_feat, n_drop, replace=False)
+    n_drop = int(n_feat * missing_ratio)
+    if n_drop == 0:
+        return X_m, np.array([], dtype=int)
+    idx = rng.choice(n_feat, n_drop, replace=False)
     X_m[:, :, idx] = 0.0
     return X_m, idx
 

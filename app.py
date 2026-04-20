@@ -204,6 +204,23 @@ if page == "🏠 Overview":
     </div>
     """, unsafe_allow_html=True)
 
+    # NASA attribution
+    st.markdown("""
+    <div style="display:flex;align-items:center;gap:16px;background:#f0f4ff;
+                border-radius:10px;padding:12px 20px;margin-bottom:8px;border:1px solid #dde3f5">
+        <img src="https://www.nasa.gov/wp-content/themes/nasa/assets/images/nasa-logo.svg"
+             height="48" style="flex-shrink:0"/>
+        <div>
+            <b style="font-size:0.95rem">Dataset: NASA CMAPSS — Commercial Modular Aero-Propulsion System Simulation</b><br>
+            <span style="font-size:0.82rem;color:#555">
+            100 turbofan engines run to failure under one operating condition (FD001 subset).
+            Sensors: 21 channels measuring temperatures, pressures, fan speeds, and fuel flow.
+            Ground-truth RUL labels provided by NASA Prognostics Center of Excellence.
+            </span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     m_tnt = get_metrics(y_te_seq, tnt_pred)
     m_lstm = get_metrics(y_te_seq, lstm_pred)
 
@@ -279,7 +296,18 @@ if page == "🏠 Overview":
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🔮 RUL Prediction":
     st.title("RUL Prediction with Uncertainty")
-    st.markdown("Select an engine to see the Temporal Neural Tree's prediction with calibrated confidence bounds.")
+
+    st.info("""
+**What is this page?**
+This page shows real-time Remaining Useful Life (RUL) predictions for 100 turbofan engines
+from the NASA CMAPSS FD001 test set.
+
+- **RUL** = how many more operating cycles the engine can run before failure. 1 cycle ≈ one flight.
+- **Engine 1–100** = individual test engines. Each has a known true RUL (ground truth) used to measure prediction accuracy.
+- **Critical / Caution / Healthy** = fleet-level status based on predicted RUL thresholds (<40, 40–80, >80 cycles).
+- **95% confidence interval** = TNT's uncertainty estimate. A wider band means the model is less certain — e.g. under sensor failure.
+- **Noise σ / Missing sensors** = sliders to simulate degraded sensor conditions and see how each model responds.
+    """)
     st.markdown("---")
 
     critical = int(np.sum(y_te_seq <= 40))

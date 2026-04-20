@@ -1,6 +1,5 @@
 """
-Turbofan Engine RUL Prediction
-IEEE SMC 2026 | Trustworthy AI for Safety-Critical Systems
+Turbofan Engine RUL Prediction — Temporal Neural Tree Demo
 """
 
 import streamlit as st
@@ -16,138 +15,125 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from src.data_preprocessing import (
     load_cmapss, prepare_features, USEFUL_FEATURES,
-    add_gaussian_noise, simulate_missing_sensors
+    add_gaussian_noise, simulate_missing_sensors,
+    load_cmapss_sequences
 )
 from src.neural_tree import NeuralTreeEnsemble, train_neural_tree, predict_neural_tree
+from src.temporal_neural_tree import (TemporalNeuralTreeEnsemble,
+                                       train_temporal_nt, predict_temporal_nt)
+from src.lstm_baseline import (LSTMBaseline, train_lstm, predict_lstm,
+                                apply_missing_to_sequences, apply_noise_to_sequences)
 from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
 from sklearn.metrics import mean_squared_error, r2_score
+from math import sqrt
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Turbofan RUL Prediction",
+    page_title="Turbofan RUL — Temporal Neural Tree",
     page_icon="✈️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ── Custom CSS ─────────────────────────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-
 .hero-banner {
     background: linear-gradient(135deg, #0b0c2a 0%, #1a237e 50%, #0d47a1 100%);
-    border-radius: 16px;
-    padding: 40px 36px;
-    color: white;
-    margin-bottom: 24px;
+    border-radius: 16px; padding: 40px 36px; color: white; margin-bottom: 24px;
 }
-.hero-banner h1 {
-    font-size: 2rem; font-weight: 700; margin: 0 0 8px 0; color: white;
-}
-.hero-banner p { font-size: 1rem; opacity: 0.85; margin: 0; color: white; }
+.hero-banner h1 { font-size: 2rem; font-weight: 700; margin: 0 0 8px 0; color: white; }
+.hero-banner p  { font-size: 1rem; opacity: 0.85; margin: 0; color: white; }
 .badge {
-    display: inline-block;
-    background: rgba(255,255,255,0.15);
-    border: 1px solid rgba(255,255,255,0.3);
-    border-radius: 20px;
-    padding: 4px 14px;
-    font-size: 0.78rem;
-    margin: 6px 4px 0 0;
-    color: white;
+    display: inline-block; background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.3); border-radius: 20px;
+    padding: 4px 14px; font-size: 0.78rem; margin: 6px 4px 0 0; color: white;
 }
 .nasa-card {
-    background: #f8f9ff;
-    border: 1px solid #e0e4f0;
-    border-radius: 12px;
-    padding: 20px;
-    margin-bottom: 12px;
+    background: #f8f9ff; border: 1px solid #e0e4f0;
+    border-radius: 12px; padding: 20px; margin-bottom: 12px;
 }
 .stat-card {
     background: linear-gradient(135deg, #1a237e, #1565c0);
-    border-radius: 12px;
-    padding: 20px 16px;
-    text-align: center;
-    color: white;
+    border-radius: 12px; padding: 20px 16px; text-align: center; color: white;
 }
 .stat-card .num { font-size: 2.2rem; font-weight: 700; }
 .stat-card .lbl { font-size: 0.8rem; opacity: 0.8; margin-top: 2px; }
 .metric-card {
-    background: #f0f4ff;
-    border-radius: 10px;
-    padding: 16px;
-    text-align: center;
-    border-left: 4px solid #2196F3;
+    background: #f0f4ff; border-radius: 10px; padding: 16px;
+    text-align: center; border-left: 4px solid #2196F3;
 }
 .github-btn {
-    background: #24292e;
-    color: white !important;
-    padding: 10px 20px;
-    border-radius: 8px;
-    text-decoration: none;
-    font-weight: 600;
-    display: inline-block;
-    margin-top: 8px;
+    background: #24292e; color: white !important; padding: 10px 20px;
+    border-radius: 8px; text-decoration: none; font-weight: 600;
+    display: inline-block; margin-top: 8px;
 }
 .section-label {
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    color: #5c6bc0;
-    margin-bottom: 6px;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 1.5px;
+    text-transform: uppercase; color: #5c6bc0; margin-bottom: 6px;
 }
+.unc-band { background: #e3f2fd; border-radius: 8px; padding: 12px 16px; margin-top: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Model training (cached) ───────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Training models on NASA CMAPSS data...")
-def load_models_and_data():
-    train_df, test_df = load_cmapss(dataset='FD001', data_dir='data')
-    X_train, y_train, X_test, y_test, scaler = prepare_features(train_df, test_df)
-    input_dim = X_train.shape[1]
-
-    # Neural Tree
-    nt = NeuralTreeEnsemble(input_dim=input_dim, n_trees=5, depth=5,
-                             hidden_dim=32, dropout=0.15)
-    train_neural_tree(nt, X_train, y_train, epochs=200, lr=5e-4,
-                      sensor_dropout=0.1, verbose=False)
-
-    # Random Forest
-    rf = RandomForestRegressor(n_estimators=200, max_depth=12,
-                                random_state=42, n_jobs=4)
-    rf.fit(X_train, y_train)
-
-    # Gradient Boosting
-    gb = HistGradientBoostingRegressor(max_iter=200, max_depth=5,
-                                        learning_rate=0.1, random_state=42)
-    gb.fit(X_train, y_train)
-
-    return nt, rf, gb, X_train, y_train, X_test, y_test, train_df, test_df, scaler
-
-
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def nasa_score(y_true, y_pred):
     d = y_pred - y_true
     return float(np.sum(np.where(d < 0, np.exp(-d/13)-1, np.exp(d/10)-1)))
 
-
 def get_metrics(y_true, y_pred):
-    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
-    r2   = float(r2_score(y_true, y_pred))
-    mae  = float(np.mean(np.abs(y_true - y_pred)))
-    ns   = nasa_score(y_true, y_pred)
-    return {"RMSE": rmse, "MAE": mae, "R²": r2, "NASA Score": ns}
+    rmse = float(sqrt(mean_squared_error(y_true, y_pred)))
+    return {"RMSE": rmse, "MAE": float(np.mean(np.abs(y_true-y_pred))),
+            "R²": float(r2_score(y_true, y_pred)), "NASA": nasa_score(y_true, y_pred)}
+
+
+# ── Model training (cached) ───────────────────────────────────────────────────
+@st.cache_resource(show_spinner="Training models on NASA CMAPSS FD001...")
+def load_models_and_data():
+    train_df, test_df = load_cmapss(dataset='FD001', data_dir='data')
+    X_train, y_train, X_test, y_test, scaler = prepare_features(train_df, test_df)
+    X_tr_seq, y_tr_seq, X_te_seq, y_te_seq, _ = \
+        load_cmapss_sequences('FD001', 'data', seq_len=30)
+
+    # Temporal Neural Tree (primary model)
+    tnt = TemporalNeuralTreeEnsemble(input_dim=17, hidden_dim=64,
+                                      gru_layers=2, n_trees=5, depth=5)
+    train_temporal_nt(tnt, X_tr_seq, y_tr_seq, epochs=200,
+                      sensor_dropout=0.1, verbose=False)
+
+    # Vanilla NT (ablation)
+    vnt = NeuralTreeEnsemble(input_dim=17, n_trees=5, depth=5, hidden_dim=32)
+    train_neural_tree(vnt, X_train, y_train, epochs=200,
+                      sensor_dropout=0.1, verbose=False)
+
+    # LSTM baseline (no sensor dropout)
+    lstm = LSTMBaseline(input_dim=17, hidden_dim=64, num_layers=2)
+    train_lstm(lstm, X_tr_seq, y_tr_seq, epochs=150, verbose=False)
+
+    # Ensemble baselines
+    rf = RandomForestRegressor(n_estimators=200, max_depth=12,
+                                random_state=42, n_jobs=4)
+    rf.fit(X_train, y_train)
+    gb = HistGradientBoostingRegressor(max_iter=200, max_depth=5,
+                                        learning_rate=0.1, random_state=42)
+    gb.fit(X_train, y_train)
+
+    return (tnt, vnt, lstm, rf, gb,
+            X_train, y_train, X_test, y_test,
+            X_tr_seq, y_tr_seq, X_te_seq, y_te_seq,
+            train_df, test_df, scaler)
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.markdown("""
-<div style="background:linear-gradient(135deg,#0b0c2a,#1a237e);border-radius:10px;padding:16px;margin-bottom:12px;text-align:center">
+<div style="background:linear-gradient(135deg,#0b0c2a,#1a237e);border-radius:10px;
+            padding:16px;margin-bottom:12px;text-align:center">
     <div style="font-size:2rem">✈️</div>
     <div style="color:white;font-weight:700;font-size:0.95rem;margin-top:4px">Turbofan RUL</div>
-    <div style="color:rgba(255,255,255,0.7);font-size:0.75rem">IEEE SMC 2026</div>
+    <div style="color:rgba(255,255,255,0.7);font-size:0.75rem">Temporal Neural Tree</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -156,696 +142,501 @@ page = st.sidebar.radio("Navigation", [
     "🔮 RUL Prediction",
     "🌊 Robustness Test",
     "📊 Model Comparison",
-    "🏆 Results vs Literature",
+    "🎯 Uncertainty",
     "🔍 Feature Importance"
 ])
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
 <div style="font-size:0.8rem;color:#555;line-height:1.8">
 <b>Dataset</b><br>NASA CMAPSS FD001<br><br>
-<b>Author</b><br>Cagri Temel<br><br>
-<b>Conference</b><br>IEEE SMC 2026<br>Bellevue, WA, USA
+<b>Author</b><br>Cagri Temel / Hezarfen LLC<br><br>
+<b>Model</b><br>Temporal Neural Tree<br>GRU + Soft Decision Trees<br>+ Leaf Uncertainty
 </div>
 """, unsafe_allow_html=True)
-st.sidebar.markdown("")
-st.sidebar.markdown("[GitHub Repository](https://github.com/cgrtml/turbofan-explainable-neural-trees)")
+st.sidebar.markdown("[GitHub](https://github.com/cgrtml/turbofan-explainable-neural-trees)")
 
-# ── Load data & models ─────────────────────────────────────────────────────────
-nt, rf, gb, X_train, y_train, X_test, y_test, train_df, test_df, scaler = load_models_and_data()
+# ── Load ──────────────────────────────────────────────────────────────────────
+(tnt, vnt, lstm, rf, gb,
+ X_train, y_train, X_test, y_test,
+ X_tr_seq, y_tr_seq, X_te_seq, y_te_seq,
+ train_df, test_df, scaler) = load_models_and_data()
+
+tnt_pred, tnt_std   = predict_temporal_nt(tnt, X_te_seq)
+vnt_pred            = predict_neural_tree(vnt, X_test)
+lstm_pred           = predict_lstm(lstm, X_te_seq)
+rf_pred             = rf.predict(X_test)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 1: Overview
 # ══════════════════════════════════════════════════════════════════════════════
 if page == "🏠 Overview":
-
-    # Hero banner
     st.markdown("""
     <div class="hero-banner">
-        <h1>Explainable Neural Trees for Turbofan Engine RUL Prediction</h1>
-        <p>Predicting when aircraft engines need maintenance, before failure occurs.</p>
+        <h1>Temporal Neural Trees for Turbofan Engine RUL Prediction</h1>
+        <p>GRU sequence encoder + soft decision trees + calibrated uncertainty — robust to sensor failure.</p>
         <br>
-        <span class="badge">📄 IEEE SMC 2026</span>
-        <span class="badge">🏛 Trustworthy AI Workshop</span>
-        <span class="badge">✈️ Safety-Critical Systems</span>
-        <span class="badge">🔬 NASA CMAPSS Dataset</span>
+        <span class="badge">GRU Encoder</span>
+        <span class="badge">Soft Decision Trees</span>
+        <span class="badge">Sensor Dropout</span>
+        <span class="badge">Leaf Uncertainty</span>
+        <span class="badge">NASA CMAPSS</span>
     </div>
     """, unsafe_allow_html=True)
 
-    # Stats row
+    m_tnt = get_metrics(y_te_seq, tnt_pred)
+    m_lstm = get_metrics(y_te_seq, lstm_pred)
+
     c1, c2, c3, c4, c5 = st.columns(5)
     for col, num, lbl in [
-        (c1, "100", "Training Engines"),
-        (c2, "100", "Test Engines"),
-        (c3, "21", "Sensor Channels"),
-        (c4, "130", "Max RUL (cycles)"),
-        (c5, "0.807", "Neural Tree R²"),
+        (c1, f"{m_tnt['RMSE']:.2f}", "TNT RMSE (cycles)"),
+        (c2, f"{m_lstm['RMSE']:.2f}", "LSTM RMSE (cycles)"),
+        (c3, f"{m_tnt['R²']:.3f}", "TNT R²"),
+        (c4, "30%", "Sensor Failure"),
+        (c5, "Yes", "Uncertainty Output"),
     ]:
         col.markdown(f"""
         <div class="stat-card">
             <div class="num">{num}</div>
             <div class="lbl">{lbl}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        </div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-
-    # NASA section
-    col_nasa, col_gh = st.columns([3, 1])
-    with col_nasa:
-        st.markdown('<div class="section-label">Data Source</div>', unsafe_allow_html=True)
-        st.markdown("""
-        <div class="nasa-card">
-        <img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIj8+CjxzdmcgaGVpZ2h0PSI5MiIgdmlld0JveD0iMCAwIDExMCA5MiIgd2lkdGg9IjExMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iNTAuMDQ5IiBjeT0iNDUiIGZpbGw9IiMwYjNkOTEiIHI9IjQwLjE0Ii8+CjxnIGZpbGw9IiNmZmYiPgo8Y2lyY2xlIGN4PSI0Ny42NzkiIGN5PSIxMi41NyIgcj0iLjQ1Ii8+CjxjaXJjbGUgY3g9IjUyLjI5OSIgY3k9IjEzLjE3IiByPSIuNDUiLz4KPGNpcmNsZSBjeD0iNTguMzU5IiBjeT0iMjEuMzMiIHI9Ii40NSIvPgo8Y2lyY2xlIGN4PSIyNS4xMTkiIGN5PSI2My4zMyIgcj0iLjQ1Ii8+CjxjaXJjbGUgY3g9IjI2LjI4OSIgY3k9IjY2LjkzIiByPSIuNDUiLz4KPGNpcmNsZSBjeD0iMjAuNzA5IiBjeT0iNjMuODciIHI9Ii4zMzciLz4KPGNpcmNsZSBjeD0iMzkuMDA5IiBjeT0iNzAuOTQyIiByPSIuMzM4Ii8+CjxjaXJjbGUgY3g9IjY3LjcxMSIgY3k9IjY0Ljk4IiByPSIuMzM3Ii8+CjxjaXJjbGUgY3g9Ijc2LjA1MiIgY3k9IjU1LjkyIiByPSIuMzM4Ii8+CjxjaXJjbGUgY3g9IjM1LjE2OSIgY3k9IjIzLjk2MiIgcj0iLjMzNyIvPgo8Y2lyY2xlIGN4PSI0NC4zNDkiIGN5PSIxNy4yMiIgcj0iLjMzNyIvPgo8Y2lyY2xlIGN4PSI0My4zNTIiIGN5PSIxNi41NiIgcj0iLjMzNyIvPgo8Y2lyY2xlIGN4PSI0Mi40NTIiIGN5PSIxNS45IiByPSIuMzM3Ii8+CjxjaXJjbGUgY3g9IjM2LjYwOSIgY3k9IjI1LjcwMyIgcj0iLjMzNyIvPgo8Y2lyY2xlIGN4PSI1MC4xMzEiIGN5PSI4LjE2IiByPSIuMzM3Ii8+CjxjaXJjbGUgY3g9IjUyLjM1MiIgY3k9IjE3Ljg4IiByPSIuMzM3Ii8+CjxjaXJjbGUgY3g9IjQ4Ljg0OSIgY3k9IjE1Ljk4MiIgcj0iLjMzNyIvPgo8Y2lyY2xlIGN4PSI0Mi44NDkiIGN5PSIxOC41NjMiIHI9Ii4zMzciLz4KPGNpcmNsZSBjeD0iNjkuMzA5IiBjeT0iNzMuODgzIiByPSIuMzM3Ii8+CjxjaXJjbGUgY3g9IjI0LjU0OSIgY3k9IjY1LjYxIiByPSIuMzM4Ii8+CjxjaXJjbGUgY3g9IjQ4LjAwOSIgY3k9IjY5Ljk2IiByPSIuMzM4Ii8+CjxjaXJjbGUgY3g9IjMxLjUzMSIgY3k9IjY1LjM0IiByPSIuMzM4Ii8+CjxjaXJjbGUgY3g9IjM0LjQ0OSIgY3k9IjcwLjEwMyIgcj0iLjMzOCIvPgo8Y2lyY2xlIGN4PSI1NS45MjkiIGN5PSI2Ny4xMDMiIHI9Ii4zMzciLz4KPGNpcmNsZSBjeD0iNjcuNzcxIiBjeT0iNjAuNDIiIHI9Ii4zMzciLz4KPGNpcmNsZSBjeD0iNzYuNzQ5IiBjeT0iNjQuNTIyIiByPSIuMzM3Ii8+CjxjaXJjbGUgY3g9Ijc5LjgwOSIgY3k9IjY2LjQ4IiByPSIuMzM3Ii8+CjxjaXJjbGUgY3g9IjgwLjMxMiIgY3k9IjYxLjE0IiByPSIuMzM3Ii8+CjxjaXJjbGUgY3g9IjM1LjY3MSIgY3k9IjUzLjU4IiByPSIuMzM3Ii8+CjxjaXJjbGUgY3g9IjM1Ljc5OSIgY3k9IjYxLjMyIiByPSIuNDUiLz4KPGNpcmNsZSBjeD0iMzguNDk5IiBjeT0iNjcuMDIiIHI9Ii40NSIvPgo8Y2lyY2xlIGN4PSI3MC44MzkiIGN5PSI2MS4wOCIgcj0iLjQ1Ii8+CjxjaXJjbGUgY3g9IjgyLjQ3OSIgY3k9IjYwLjQyIiByPSIuNDUiLz4KPGNpcmNsZSBjeD0iNzYuNzE5IiBjeT0iNTcuOTYiIHI9Ii40NSIvPgo8Y2lyY2xlIGN4PSI3MC44MzkiIGN5PSI1OC4yIiByPSIuNDUiLz4KPHBhdGggZD0iTTU4LjcxIDEyLjI4OGwxLjExOS0uMTA3LTEuMTE3LS4wNjNjLS4wMzUtLjIxNi0uMjA4LS4zODUtLjQyNi0uNDEzbC0uMTA3LTEuMTE0LS4wNjQgMS4xMjNjLS4yMDIuMDQ1LS4zNTcuMjE0LS4zODIuNDI0bC0xLjE0NC4xMDQgMS4xNTIuMDYyYy4wNDIuMTkzLjE5OC4zNDQuMzk0LjM4bC4xMDQgMS4xNDguMDYxLTEuMTQ2QzU4LjUwNyAxMi42NTEgNTguNjcxIDEyLjQ5MiA1OC43MSAxMi4yODh6Ii8+CjxwYXRoIGQ9Ik0zOS44MjQgMjQuNzQ2bDEuMTE5LS4xMDctMS4xMTctLjA2M2MtLjAzNC0uMjE2LS4yMDgtLjM4NS0uNDI2LS40MTNsLS4xMDctMS4xMTQtLjA2MyAxLjEyM2MtLjIwMy4wNDUtLjM1OC4yMTQtLjM4My40MjRsLTEuMTQ0LjEwNCAxLjE1Mi4wNjJjLjA0Mi4xOTMuMTk4LjM0NC4zOTQuMzhsLjEwNCAxLjE0OC4wNjItMS4xNDZDMzkuNjIyIDI1LjExIDM5Ljc4NiAyNC45NSAzOS44MjQgMjQuNzQ2eiIvPgo8cGF0aCBkPSJNODEuNjU5IDU3LjY4NGwxLjExOS0uMTA3LTEuMTE3LS4wNjNjLS4wMzQtLjIxNi0uMjA4LS4zODUtLjQyNi0uNDEzbC0uMTA3LTEuMTE0LS4wNjMgMS4xMjNjLS4yMDIuMDQ1LS4zNTcuMjE0LS4zODIuNDI0bC0xLjE0NC4xMDQgMS4xNTIuMDYyYy4wNDIuMTkzLjE5OC4zNDQuMzk0LjM4bC4xMDQgMS4xNDguMDYyLTEuMTQ2QzgxLjQ1NiA1OC4wNDggODEuNjIgNTcuODg5IDgxLjY1OSA1Ny42ODR6Ii8+CjxwYXRoIGQ9Ik0zNi4wNDQgNzQuOTA2bDEuMTE5LS4xMDctMS4xMTctLjA2M2MtLjAzNS0uMjE2LS4yMDgtLjM4NS0uNDI2LS40MTNsLS4xMDctMS4xMTMtLjA2MyAxLjEyMmMtLjIwMy4wNDUtLjM1OC4yMTQtLjM4My40MjRsLTEuMTQ0LjEwNCAxLjE1Mi4wNjJjLjA0Mi4xOTMuMTk4LjM0NS4zOTQuMzhsLjEwNCAxLjE0OC4wNjItMS4xNDZDMzUuODQxIDc1LjI3IDM2LjAwNiA3NS4xMSAzNi4wNDQgNzQuOTA2eiIvPgo8cGF0aCBkPSJNNzguMTA0IDY2LjUwNmwxLjExOS0uMTA3LTEuMTE3LS4wNjNjLS4wMzQtLjIxNi0uMjA4LS4zODUtLjQyNi0uNDEzbC0uMTA3LTEuMTE0LS4wNjMgMS4xMjJjLS4yMDIuMDQ1LS4zNTcuMjE0LS4zODIuNDI0bC0xLjE0NC4xMDQgMS4xNTIuMDYyYy4wNDIuMTkzLjE5OC4zNDQuMzk0LjM4bC4xMDQgMS4xNDguMDYyLTEuMTQ2Qzc3LjkwMSA2Ni44NyA3OC4wNjYgNjYuNzEgNzguMTA0IDY2LjUwNnoiLz4KPHBhdGggZD0iTTU5LjU2OCAzNS4zODVjLTQuNjY3IDEuODE0LTkuMjE5IDMuNDMzLTEzLjA2IDQuNjM1LTcuODA1IDIuNDQ0LTI5LjE2IDkuMDYtNDIuMDYgMTcuNGwxLjA4LjQyYzcuODYtNC40NCAxMi45NjktNS44MzUgMTcuODgtNy4zOCA1LjM0LTEuNjggMjIuNjAzLTUuNzIgMzAuNDItNy45MiAyLjY0MS0uNzQzIDUuNzM0LTEuNzE2IDkuMDEtMi45LS43NjItMS4wNjMtMS41NjYtMi4xMjktMi40MTItMy4xOTNDNjAuMTQzIDM2LjA4OCA1OS44NTYgMzUuNzM0IDU5LjU2OCAzNS4zODV6TTY1LjI3IDQzLjI0NGMtMS4xMy43NjMtMi4wNzcgMS4zNzItMi43NCAxLjc1Ni0zLjg0IDIuMjItMjIuNTYxIDE1LTI2LjgyIDE3Ljk0cy0xNi4wOCAxNC4xLTE5LjU2IDE3LjM0bC0uMTIgMS4zMTljMTEuMjItMTAuMDggMTQuNzQtMTIuNTY2IDE5LjItMTUuOTU5IDUuNTItNC4yIDE2LjkzOS0xMS45NyAyMC44Mi0xNC40NiAzLjcxLTIuMzggNy4wNTYtNC41NjkgMTAuMDU5LTYuNTcyLS4wNDktLjA4Mi0uMDk4LS4xNjQtLjE0Ny0uMjQ3QzY1LjczNiA0My45OSA2NS41MDUgNDMuNjE4IDY1LjI3IDQzLjI0NHpNODIuODA5IDI0LjcyYy01LjQ2NiAzLjIwNC0xNC4wODEgNy4wNzEtMjIuNDM5IDEwLjM1Mi4yLjI0NS4zOTkuNDkyLjU5Ny43NDEuOTM0IDEuMTc2IDEuODE1IDIuMzYgMi42NDQgMy41NDUgNi41Ny0yLjQyIDEzLjc3OS01LjY2OCAxOS40OTktOS41OTktMi43MjUgMi41ODItMTEuNzM0IDkuMzE1LTE3LjIyNyAxMy4wNjguMjgzLjQ2MS41NTcuOTIyLjgyMiAxLjM4MSA4LjMyMi01LjU2OSAxMy45MjItOS42NjggMTcuMTg1LTEyLjQwOSA0LjUtMy43OCAxNC43Ni0xMi4yNCAxOC42Ni0yMy41OEM5NS43MDkgMTYuOTIgODcuNjIxIDIxLjg5OSA4Mi44MDkgMjQuNzJ6IiBmaWxsPSIjZmMzZDIxIi8+CjxwYXRoIGQ9Ik00NC44ODQgNTQuOTM5Yy0uODg1LTEuMTE0LTIuMTA5LTIuNjA2LTMuMDI4LTMuNzYzLTEuMjI5LTEuNTQ3LTIuMzY2LTMuMTEtMy40MDgtNC42NzEtLjM0LjA4NS0uNjc5LjE3LTEuMDE4LjI1NSAxLjI1OCAxLjk2MyAyLjY1NSAzLjkyMyA0LjE3NyA1LjgzOSAxLjExMiAxLjQgMi4xMjMgMi41MjcgMi42NDEgMy4yMjguMTA1LjE0Mi4zMTMuNDU2LjU5NC44NzQuMzI0LS4yMi42NTEtLjQ0Mi45ODEtLjY2NkM0NS41MDQgNTUuNjg4IDQ1LjE4OSA1NS4zMjMgNDQuODg0IDU0LjkzOXpNNTEuMzQ0IDYwLjgwM2MtLjcyNy0uNjg4LTIuNDktMS44MzctNC4zMjUtMy41NjEtLjQwNS4yNzgtLjgxNC41Ni0xLjIyNC44NDQgMS4xODUgMS42NyAyLjc5OSAzLjcyMSA0LjA2MyA0LjMxOUM1MS43NjIgNjMuMzA3IDUyLjI3NSA2MS42ODUgNTEuMzQ0IDYwLjgwM3pNNjAuOTY3IDM1LjgxM2MtMTAuNDkyLTEzLjIwNi0yMy4zMDktMjAuNDYxLTI4LjgzNS0xNi4wNy00LjI5MiAzLjQxLTIuNTMgMTMuMzc2IDMuMzg2IDIzLjg0NS4zMDYtLjEwNS42MDktLjIwOC45MDktLjMxLTUuOTcxLTEwLjItNy42MDUtMTkuNjc5LTMuNTU3LTIyLjg5NiA1LjA4Ny00LjA0MiAxNy4zNyAzLjI0MSAyNy41NTggMTYuMDY0IDIuMTA5IDIuNjU0IDMuOTYzIDUuMzE4IDUuNTMzIDcuOTE1IDYuMDEyIDkuOTUgNy44NTcgMTguOTQ4IDMuNzAzIDIyLjYyMS0xLjI3MSAxLjEyNC01LjE1NSAxLjU2NS0xMC4yNDMtLjcyNS0uMDcxLjA4OS4wNDMuMzMuMTMyLjM4OSA0LjM5MiAxLjc2NiA4LjU5OSAyLjQzOSAxMC43MjMuNzUyQzc1LjM4IDYzLjM0MiA3MS40NTkgNDkuMDE5IDYwLjk2NyAzNS44MTN6Ii8+CjxwYXRoIGQ9Ik0xNS45NjkgMzcuMzhoNi43Mmw1LjY0IDkuNTdjMCAwIDAtNi45MyAwLTcuNDcgMC0uODQtMS4wNjUtMS45MzUtMS40NC0yLjEuNDUgMCA0LjM4IDAgNC42NSAwLS4yODUuMDc1LTEuMiAxLjE4NS0xLjIgMi4xIDAgLjQ1IDAgMTAuNSAwIDEwLjk4IDAgLjY3NS45NzUgMS42MDUgMS40NCAxLjk2NWgtNi40OGwtNS43My05LjYxNWMwIDAgMCA3LjE3IDAgNy41NiAwIC43NS43MzUgMS40NyAxLjUgMi4wODVoLTQuOTVjLjcwNS0uMyAxLjM4LTEuMjQ1IDEuNDQtMS45OTVzMC0xMC40MjUgMC0xMC44NDVDMTcuNTU5IDM4LjcgMTYuNjc0IDM3Ljk1IDE1Ljk2OSAzNy4zOHoiLz4KPHBhdGggZD0iTTc3LjQzOSA1Mi40MjVoOC45NGMtLjQ5NS0uMTItMS4wNS0uNzA1LTEuMzUtMS40ODUtLjMtLjc4LTUuMDQtMTMuNTYtNS4wNC0xMy41Nkg3Ni41OWMtLjk2NC42OTQtMS45OTcgMS40MjYtMy4xIDIuMTk3LS4wMDMuMDI4LS4wMDYuMDU2LS4wMTEuMDgzLS4xNDguOS0yLjgwOCAxMC41MzQtMi45NyAxMS4wMS0uMjI1LjY2LTEuMzggMS4zOTUtMS44NDUgMS43ODVoNC44MTVjLS40OC0uNTQtLjg3LTEuMDY1LS43OC0xLjY2NS4wOS0uNi4zNi0xLjguMzYtMS44aDQuOThjLjIyNS42LjM5MyAxLjEzOS40OCAxLjY1Qzc4LjYyNCA1MS4yNTUgNzcuOTk0IDUxLjk0NSA3Ny40MzkgNTIuNDI1ek03My41MDkgNDcuMDdsMS42OC01LjQ5IDIuMjIgNS40OUg3My41MDl6TTcyLjc1MiAzNy45MjhjLjI0Ny0uMTgyLjQ5NS0uMzY1Ljc0Mi0uNTQ4aC0xLjMwNUM3Mi4zMTkgMzcuNSA3Mi41MzQgMzcuNjg5IDcyLjc1MiAzNy45Mjh6Ii8+CjxwYXRoIGQ9Ik0zOC41NTkgNTAuNzljLjA5LS42LjM2LTEuOC4zNi0xLjhoNC45OGMuMjI1LjYuMzkzIDEuMTM5LjQ4IDEuNjUuMTA1LjYxNS0uNTI1IDEuMzA1LTEuMDggMS43ODVoNy44NzFjLjE2NC0uMTEuMzI3LS4yMi40OS0uMzI5LS4zMDUtLjI3LS41ODYtLjY3NS0uNzcxLTEuMTU2LS4zLS43OC01LjA0LTEzLjU2LTUuMDQtMTMuNTZoLTcuOGMuMzc1LjM0NSAxLjQ1NSAxLjI3NSAxLjI5IDIuMjgtLjE0Ny45LTIuODA4IDEwLjUzNC0yLjk3IDExLjAxLS4yMjUuNjYtMS4zOCAxLjM5NS0xLjg0NSAxLjc4NWg0LjgxNUMzOC44NTkgNTEuOTE1IDM4LjQ2OSA1MS4zOSAzOC41NTkgNTAuNzl6TTQxLjA0OSA0MS41OGwyLjIyIDUuNDloLTMuOUw0MS4wNDkgNDEuNTh6Ii8+CjxwYXRoIGQ9Ik02NS43NDggNDQuODQ4Yy0xLjQ2OC45NzgtMy4wMTcgMS45OTktNC42NDkgMy4wNjUuNzMyLjM1NSAxLjMxNS44MDEgMS4zNzEgMS4zNzcuMTA0IDEuMDgyLTIuMDcgMS42MDUtNC4wMzUgMS4zOC0uMzkzLS4wNDUtLjc3OS0uMTQ4LTEuMTQ3LS4yODYtLjQwOC4yNjMtLjgyLjUyOC0xLjIzOC43OTYtLjQyNS4yNzMtLjk0MS42MDktMS41My45OTd2MS41NTNjLjM5LS43NjUgMS4yNDMtMS40NSAxLjkwNS0xLjQ4NS4yODUtLjAxNSAxLjI3NS45IDUuMzU1LjY3NSAxLjk4LS4xMDkgNS44MDUtMi4yMiA1Ljc0NS00LjY1QzY3LjQ4OSA0Ni44MzQgNjYuNzM5IDQ1LjcxNCA2NS43NDggNDQuODQ4ek01NC41MTkgNDguNnYxLjU4MmMuMzYxLS4yNDEuNzE3LS40NzggMS4wNjYtLjcwOUM1NS4wMzYgNDkuMDkxIDU0LjY0NyA0OC43MzQgNTQuNTE5IDQ4LjZ6TTY0LjM1MyA0My44NTVjLS4zOC0uMjI1LS43NjUtLjQyMi0xLjEzNC0uNTk2LTEuOTItLjktMy45My0xLjA2NS00LjM1LTIuMjgtLjI5Ni0uODU3LjU0LTEuNjUgMi41OC0xLjYyIDIuMDQuMDMgMy45MyAxLjI0NSA0LjQ0IDEuNjh2LTMuODdjLS4xNS4xNS0uODA4LjkwNS0xLjQxLjc4LTEuMTU1LS4yNC0zLjEyLS41NTMtNS4zNy0uNTQtMi41OC4wMTUtNC44IDIuMDA5LTQuODc1IDQuNTMtLjEwNSAzLjUyNSAyLjcxNSA0LjQ4NSA0LjMwNSA1LjA0LjE2NC4wNTcuMzUxLjExOC41NTQuMTgzIDEuNTI1LS45OTIgMi43MzEtMS43NTYgMy40MzctMi4xNjNDNjMuMDA0IDQ0LjcyNiA2My42MjUgNDQuMzM0IDY0LjM1MyA0My44NTV6Ii8+CjwvZz4KPC9zdmc+Cg==" height="52" style="margin-bottom:12px"/>
-        <h4 style="margin:0 0 8px 0">CMAPSS: Commercial Modular Aero-Propulsion System Simulation</h4>
-        <p style="margin:0;color:#444;font-size:0.9rem">
-        Published by NASA's Prognostics Center of Excellence, the CMAPSS dataset is the
-        gold standard benchmark for turbofan engine degradation research.
-        It contains run-to-failure measurements from 100 simulated engines, each instrumented
-        with 21 sensors recording temperature, pressure, fan speed, and bypass ratios
-        across hundreds of flight cycles until engine failure.
-        The dataset is used in hundreds of peer-reviewed publications worldwide.
-        </p>
-        <br>
-        <a href="https://ti.arc.nasa.gov/tech/dash/groups/pcoe/prognostic-data-repository/"
-           target="_blank" style="color:#1565c0;font-weight:600;font-size:0.85rem">
-           View NASA Data Repository
-        </a>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_gh:
-        st.markdown('<div class="section-label">Source Code</div>', unsafe_allow_html=True)
-        st.markdown("""
-        <div class="nasa-card" style="text-align:center">
-        <div style="font-size:2.2rem;margin-bottom:10px">🐙</div>
-        <h4 style="margin:0 0 6px 0">Open Source</h4>
-        <p style="font-size:0.82rem;color:#555;margin:0 0 12px 0">
-        Full implementation, experiments, and trained models available on GitHub.
-        </p>
-        <a href="https://github.com/cgrtml/turbofan-explainable-neural-trees"
-           target="_blank" class="github-btn">
-           View on GitHub
-        </a>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("---")
-
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown('<div class="section-label">Problem</div>', unsafe_allow_html=True)
-        st.subheader("What is Remaining Useful Life?")
+        st.markdown('<div class="section-label">Architecture</div>', unsafe_allow_html=True)
+        st.subheader("Temporal Neural Tree")
         st.markdown("""
-        **Remaining Useful Life (RUL)** is the number of flight cycles a turbofan engine
-        can complete before requiring maintenance or replacement.
+        **Three improvements over vanilla Neural Trees:**
 
-        Unplanned engine failures cost airlines millions of dollars per incident and
-        pose serious safety risks. Accurate RUL prediction enables:
-        - Scheduling maintenance before failure occurs
-        - Avoiding unnecessary early replacements
-        - Keeping aircraft in service as long as safely possible
+        1. **GRU Encoder** processes 30-cycle sequences (same as LSTM) — closes the accuracy gap
+        2. **Channel-level Sensor Dropout** zeros entire sensor channels during training,
+           teaching the model to function without any given sensor
+        3. **Leaf-level Gaussian Uncertainty** — each tree leaf outputs mean + variance,
+           combined into calibrated prediction intervals. No Monte Carlo sampling needed.
+
+        **Key result:** At 30% missing sensors, TNT degrades only ~13% while LSTM degrades ~117%.
         """)
-
-        st.markdown('<div class="section-label" style="margin-top:20px">Our Method</div>', unsafe_allow_html=True)
-        st.subheader("Explainable Neural Trees")
         st.markdown("""
-        A hybrid model combining the predictive power of neural networks with
-        the interpretability of decision trees.
-
-        - **MLP Embedding layer** learns compact representations from 17 raw sensor channels
-        - **Soft Decision Tree ensemble** routes predictions through interpretable branching logic
-        - **Sensor Dropout Training** exposes the model to missing sensors during training,
-          making it robust when sensors fail in the field
-        - **Gradient-based explanations** identify which sensors drive each prediction
-        """)
+        <div class="nasa-card" style="margin-top:12px">
+        <b>Why not just use LSTM?</b><br>
+        <span style="font-size:0.88rem;color:#444">
+        LSTM is more accurate on clean data but catastrophically brittle when sensor channels
+        fail completely. It interprets zeroed channels as extreme out-of-distribution readings,
+        corrupting all subsequent hidden states. TNT's channel-level dropout training makes it
+        immune to this failure mode. Additionally, LSTM provides no uncertainty estimates and no
+        interpretable feature importance.
+        </span>
+        </div>
+        """, unsafe_allow_html=True)
 
     with col2:
-        st.markdown('<div class="section-label">Live Data</div>', unsafe_allow_html=True)
-        st.subheader("Sensor Degradation: Engine #1")
-        st.caption("Normalized sensor readings across 163 flight cycles. As the engine ages, sensors drift from their baseline values.")
+        st.markdown('<div class="section-label">Live Sensor Data</div>', unsafe_allow_html=True)
+        st.subheader("Engine #1 Degradation")
         engine_1 = train_df[train_df['unit_id'] == 1].copy()
         fig = go.Figure()
         for sensor, color, label in [
-            ('s4',  '#1565c0', 'HPC Outlet Temp (s4)'),
-            ('s11', '#2e7d32', 'Bypass Ratio (s11)'),
-            ('s12', '#e65100', 'Burner Fuel-Air Ratio (s12)'),
-            ('s20', '#880e4f', 'HPT Bleed Enthalpy (s20)'),
+            ('s4',  '#1565c0', 's4 — HPC Outlet Temp'),
+            ('s11', '#2e7d32', 's11 — Bypass Ratio'),
+            ('s12', '#e65100', 's12 — Burner Fuel-Air'),
         ]:
             vals = engine_1[sensor]
-            normalized = (vals - vals.min()) / (vals.max() - vals.min() + 1e-8)
-            fig.add_trace(go.Scatter(
-                x=engine_1['time_cycle'], y=normalized,
-                name=label, line=dict(color=color, width=2)
-            ))
-        fig.update_layout(
-            xaxis_title="Flight Cycle",
-            yaxis_title="Normalized Sensor Value (0 = min, 1 = max)",
-            height=340, margin=dict(t=10, b=10),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(248,249,255,1)',
-            legend=dict(orientation='h', y=-0.25, font=dict(size=11))
-        )
+            norm = (vals - vals.min()) / (vals.max() - vals.min() + 1e-8)
+            fig.add_trace(go.Scatter(x=engine_1['time_cycle'], y=norm,
+                                     name=label, line=dict(color=color, width=2)))
+        fig.update_layout(xaxis_title="Flight Cycle", yaxis_title="Normalized Value",
+                          height=300, margin=dict(t=10,b=10),
+                          legend=dict(orientation='h', y=-0.3))
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")
-    st.markdown('<div class="section-label">Dataset Statistics</div>', unsafe_allow_html=True)
-    st.subheader("RUL Distribution across Training Engines")
-    st.caption("Most engines in the training set have between 0 and 130 cycles of life remaining. The RUL is capped at 130 to focus the model on the degradation phase.")
-    fig2 = px.histogram(train_df, x='RUL', nbins=35,
-                        color_discrete_sequence=['#1565c0'],
-                        labels={'RUL': 'Remaining Useful Life (cycles)', 'count': 'Number of Readings'})
-    fig2.update_traces(marker_line_width=0.5, marker_line_color='white')
-    fig2.update_layout(height=260, margin=dict(t=10, b=40),
-                       paper_bgcolor='rgba(0,0,0,0)',
-                       plot_bgcolor='rgba(248,249,255,1)')
-    st.plotly_chart(fig2, use_container_width=True)
+    st.markdown('[GitHub Repository](https://github.com/cgrtml/turbofan-explainable-neural-trees)')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 2: RUL Prediction
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🔮 RUL Prediction":
-    st.title("RUL Prediction")
-    st.markdown("""
-    The NASA CMAPSS dataset contains **100 test engines**, each one is a physical turbofan engine
-    unit that was run under real operating conditions. For each engine, we have its final sensor
-    readings before it was stopped. The model uses these readings to predict how many flight cycles
-    the engine has remaining before it needs maintenance.
-
-    Use the controls on the left to select an engine, simulate sensor noise, or drop sensors
-    to see how predictions change under degraded conditions.
-    """)
+    st.title("RUL Prediction with Uncertainty")
+    st.markdown("Select an engine to see the Temporal Neural Tree's prediction with calibrated confidence bounds.")
     st.markdown("---")
 
-    # Engine health overview bar
-    rul_vals = y_test
-    critical  = int(np.sum(rul_vals <= 40))
-    caution   = int(np.sum((rul_vals > 40) & (rul_vals <= 80)))
-    healthy   = int(np.sum(rul_vals > 80))
+    critical = int(np.sum(y_te_seq <= 40))
+    caution  = int(np.sum((y_te_seq > 40) & (y_te_seq <= 80)))
+    healthy  = int(np.sum(y_te_seq > 80))
     st.markdown(f"""
     <div style="background:#f8f9ff;border-radius:10px;padding:14px 20px;
                 display:flex;gap:24px;margin-bottom:16px;border:1px solid #e0e4f0">
-        <div>
-            <span style="font-size:0.72rem;font-weight:600;letter-spacing:1px;
-                         text-transform:uppercase;color:#555">Fleet Status (100 test engines)</span>
-        </div>
+        <div><span style="font-size:0.72rem;font-weight:600;letter-spacing:1px;
+                          text-transform:uppercase;color:#555">Fleet (100 engines)</span></div>
         <div><span style="color:#c62828;font-weight:700">{critical}</span>
-             <span style="color:#888;font-size:0.85rem"> Critical (under 40 cycles)</span></div>
+             <span style="color:#888;font-size:0.85rem"> Critical (&lt;40)</span></div>
         <div><span style="color:#f57f17;font-weight:700">{caution}</span>
-             <span style="color:#888;font-size:0.85rem"> Caution (40–80 cycles)</span></div>
+             <span style="color:#888;font-size:0.85rem"> Caution (40–80)</span></div>
         <div><span style="color:#2e7d32;font-weight:700">{healthy}</span>
-             <span style="color:#888;font-size:0.85rem"> Healthy (over 80 cycles)</span></div>
+             <span style="color:#888;font-size:0.85rem"> Healthy (&gt;80)</span></div>
     </div>
     """, unsafe_allow_html=True)
 
     col1, col2 = st.columns([1, 3])
-
     with col1:
-        st.markdown("""
-        <div style="background:#f0f4ff;border-radius:10px;padding:14px;margin-bottom:12px;
-                    border:1px solid #c5cae9;font-size:0.82rem;color:#333;line-height:1.6">
-        <b>What are these engines?</b><br><br>
-        The NASA CMAPSS dataset contains <b>100 simulated turbofan engines</b>, each one
-        representing a different physical unit in a fleet. Every engine was run from a
-        healthy state until failure under real operating conditions.<br><br>
-        For each engine, the test set captures its <b>final sensor snapshot</b> before
-        it was stopped. The true remaining life was measured but hidden from the model.
-        It is used here to evaluate prediction accuracy.
-        </div>
-        """, unsafe_allow_html=True)
+        engine_id  = st.selectbox("Engine", list(range(1, 101)),
+                                   format_func=lambda x: f"Engine {x} (RUL={int(y_te_seq[x-1])})")
+        noise_level = st.slider("Noise σ", 0.0, 0.20, 0.0, 0.01)
+        missing_pct = st.slider("Missing sensors %", 0, 50, 0, 10)
 
-        engine_id = st.selectbox("Select engine to inspect", options=list(range(1, 101)),
-                                  format_func=lambda x: f"Engine {x}  (RUL = {int(y_test[x-1])} cycles)")
-        st.markdown("**Add sensor noise**")
-        st.caption("Simulates electromagnetic interference or calibration drift.")
-        noise_level = st.slider("Noise level (σ)", 0.0, 0.20, 0.0, 0.01)
-        st.markdown("**Drop sensors**")
-        st.caption("Simulates complete sensor failure. The channel stops transmitting.")
-        missing_pct = st.slider("Missing sensors (%)", 0, 50, 0, 10)
-
-    # Get this engine's last test reading
-    X_engine = X_test[engine_id - 1:engine_id].copy()
-    y_engine = y_test[engine_id - 1]
+    # apply degradation
+    X_seq_eng = X_te_seq[engine_id-1:engine_id].copy()
+    X_snap_eng = X_test[engine_id-1:engine_id].copy()
+    true_rul = float(y_te_seq[engine_id-1])
 
     if noise_level > 0:
-        X_engine = add_gaussian_noise(X_engine, noise_std=noise_level)
+        X_seq_eng  = apply_noise_to_sequences(X_seq_eng, noise_level)
+        X_snap_eng = add_gaussian_noise(X_snap_eng, noise_level)
     if missing_pct > 0:
-        X_engine, _ = simulate_missing_sensors(X_engine, missing_ratio=missing_pct/100)
+        X_seq_eng, _  = apply_missing_to_sequences(X_seq_eng, missing_pct/100)
+        X_snap_eng, _ = simulate_missing_sensors(X_snap_eng, missing_pct/100)
 
-    pred_nt = float(predict_neural_tree(nt, X_engine)[0])
-    pred_rf = float(rf.predict(X_engine)[0])
-    pred_gb = float(gb.predict(X_engine)[0])
-    true_rul = float(y_engine)
+    p_tnt, s_tnt = predict_temporal_nt(tnt, X_seq_eng)
+    p_lstm        = predict_lstm(lstm, X_seq_eng)
+    p_vnt         = predict_neural_tree(vnt, X_snap_eng)
+    p_rf          = float(rf.predict(X_snap_eng)[0])
 
     status = "🔴 Critical" if true_rul <= 40 else ("🟡 Caution" if true_rul <= 80 else "🟢 Healthy")
 
     with col2:
         st.markdown(f"### Engine {engine_id} &nbsp; {status}")
-        st.markdown(f"**Actual remaining life: {true_rul:.0f} flight cycles.** This is the ground truth measured after the engine was stopped.")
-        st.caption("Each model reads the sensor snapshot and independently predicts how many cycles remain. Lower error = better prediction.")
+        st.markdown(f"**True RUL: {true_rul:.0f} cycles**")
 
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         for col, name, pred, color in [
-            (c1, "Neural Tree",       pred_nt, "#2196F3"),
-            (c2, "Random Forest",     pred_rf, "#4CAF50"),
-            (c3, "Gradient Boosting", pred_gb, "#FF9800"),
+            (c1, "Temporal NT", float(p_tnt[0]), "#1565c0"),
+            (c2, "LSTM",        float(p_lstm[0]), "#455a64"),
+            (c3, "Vanilla NT",  float(p_vnt[0]),  "#2e7d32"),
+            (c4, "Rnd. Forest", p_rf,              "#e65100"),
         ]:
             err = abs(pred - true_rul)
-            with col:
-                st.markdown(f"""
-                <div class="metric-card" style="border-left-color:{color}">
-                    <h4 style="color:{color};margin:0">{name}</h4>
-                    <h2 style="margin:8px 0">{pred:.1f}</h2>
-                    <small>Prediction error: {err:.1f} cycles</small>
-                </div>
-                """, unsafe_allow_html=True)
+            col.markdown(f"""
+            <div class="metric-card" style="border-left-color:{color}">
+                <h4 style="color:{color};margin:0;font-size:0.85rem">{name}</h4>
+                <h2 style="margin:6px 0;font-size:1.6rem">{pred:.1f}</h2>
+                <small>Error: {err:.1f} cycles</small>
+            </div>""", unsafe_allow_html=True)
+
+        # Uncertainty band for TNT
+        lo = max(0, float(p_tnt[0]) - 2*float(s_tnt[0]))
+        hi = float(p_tnt[0]) + 2*float(s_tnt[0])
+        st.markdown(f"""
+        <div class="unc-band">
+            <b>TNT 95% confidence interval:</b> &nbsp;
+            {lo:.1f} – {hi:.1f} cycles &nbsp;
+            (predicted σ = {float(s_tnt[0]):.1f} cycles)
+        </div>""", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("**Gauge charts below:** Each dial shows a model's predicted RUL. The black line marks the true RUL. Red zone = critical (under 40 cycles), yellow = caution, green = healthy.")
-
-        # Gauge charts — equal size via separate columns
-        g1, g2, g3 = st.columns(3)
-        for gcol, name, pred, color in [
-            (g1, "Neural Tree",       pred_nt, "#2196F3"),
-            (g2, "Random Forest",     pred_rf, "#4CAF50"),
-            (g3, "Gradient Boosting", pred_gb, "#FF9800"),
-        ]:
-            fig_g = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=pred,
-                title=dict(text=name, font=dict(size=14)),
-                gauge=dict(
-                    axis=dict(range=[0, 130]),
-                    bar=dict(color=color),
-                    steps=[
-                        dict(range=[0, 40],  color="#ffebee"),
-                        dict(range=[40, 80], color="#fff9c4"),
-                        dict(range=[80, 130],color="#e8f5e9"),
-                    ],
-                    threshold=dict(line=dict(color="black", width=3), value=true_rul)
-                ),
-                number=dict(suffix=" cycles")
-            ))
-            fig_g.update_layout(height=240, margin=dict(t=30, b=10, l=20, r=20))
-            gcol.plotly_chart(fig_g, use_container_width=True)
-
-        st.markdown("---")
-        st.markdown("**Sensor readings for this engine**")
-        st.caption("Each bar is a normalized sensor value (0 = min, 1 = max observed in training). Red bars indicate sensors that are missing or zeroed out.")
-        sensor_vals = X_engine[0]
-        fig2 = go.Figure(go.Bar(
-            x=USEFUL_FEATURES, y=sensor_vals,
-            marker_color=['#ef5350' if v == 0 else '#2196F3' for v in sensor_vals],
+        # Gauge for TNT with uncertainty
+        fig = go.Figure()
+        fig.add_trace(go.Indicator(
+            mode="gauge+number",
+            value=float(p_tnt[0]),
+            title=dict(text="Temporal NT Prediction"),
+            gauge=dict(
+                axis=dict(range=[0, 130]),
+                bar=dict(color="#1565c0"),
+                steps=[dict(range=[0,40], color="#ffebee"),
+                       dict(range=[40,80], color="#fff9c4"),
+                       dict(range=[80,130], color="#e8f5e9")],
+                threshold=dict(line=dict(color="black", width=3), value=true_rul)
+            ),
+            number=dict(suffix=" cycles")
         ))
-        fig2.update_layout(height=240, margin=dict(t=10, b=40),
-                           yaxis_title="Normalized Value [0–1]",
-                           xaxis_tickangle=-45)
-        st.plotly_chart(fig2, use_container_width=True)
+        fig.update_layout(height=240, margin=dict(t=30,b=10,l=20,r=20))
+        st.plotly_chart(fig, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 3: Robustness Test
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🌊 Robustness Test":
-    st.title("Robustness Under Real-World Conditions")
+    st.title("Robustness: TNT vs LSTM vs Vanilla NT")
     st.markdown("""
-    In safety-critical environments like aviation, sensors don't always work perfectly.
-    This page tests how well each model holds up when sensor data is imperfect.
-    There are two types of problems that can occur in real aircraft sensors:
+    This page demonstrates the core finding of the paper: **sensor dropout augmentation
+    and temporal averaging are distinct robustness properties**. LSTM is more resistant
+    to Gaussian noise; TNT is dramatically more resistant to complete sensor failure.
     """)
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.info("""
-        **Sensor Noise**
-
-        The sensor is still working, but its readings contain random errors.
-        This happens due to electromagnetic interference, vibration, temperature fluctuations,
-        or aging electronics. The sensor reports a value close to the true value,
-        but with small random distortions added.
-
-        Example: A temperature sensor reads 487.3°C instead of the true 485.0°C.
-        """)
-    with col_b:
-        st.warning("""
-        **Missing Sensors**
-
-        The sensor has completely stopped transmitting data.
-        This can happen due to wiring failures, physical damage, or power loss to the sensor unit.
-        The model receives a zero value instead of real data.
-
-        Example: A pressure sensor stops working mid-flight and reports nothing.
-        """)
-
-    st.markdown("---")
-    st.markdown("""
-    **Why Neural Trees handle this better:**
-    During training, Neural Trees are deliberately exposed to randomly dropped sensors
-    (a technique called *sensor dropout*). This forces the model to learn which combinations
-    of sensors carry the most information, so it can still make accurate predictions
-    even when some sensors are unavailable.
-    """)
-    st.markdown("---")
-
-    tab1, tab2 = st.tabs(["Sensor Noise Test", "Missing Sensor Test"])
+    tab1, tab2 = st.tabs(["Missing Sensors", "Gaussian Noise"])
 
     with tab1:
-        st.subheader("Prediction Error vs Noise Severity")
-        st.caption("RMSE = Root Mean Square Error. Lower is better. Each point shows how accurate the model is at that noise level.")
+        st.subheader("RMSE vs Missing Sensor Channels")
+        st.caption("Entire channels zeroed — simulates complete sensor failure.")
 
-        noise_levels = [0.0, 0.02, 0.05, 0.10, 0.15, 0.20]
-        nt_rmse, rf_rmse, gb_rmse = [], [], []
+        miss_ratios = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+        tnt_m, lstm_m, vnt_m, rf_m = [], [], [], []
 
         with st.spinner("Computing..."):
-            for std in noise_levels:
-                X_n = add_gaussian_noise(X_test, noise_std=std) if std > 0 else X_test.copy()
-                nt_rmse.append(np.sqrt(mean_squared_error(y_test, predict_neural_tree(nt, X_n))))
-                rf_rmse.append(np.sqrt(mean_squared_error(y_test, rf.predict(X_n))))
-                gb_rmse.append(np.sqrt(mean_squared_error(y_test, gb.predict(X_n))))
+            for r in miss_ratios:
+                Xsm, _ = apply_missing_to_sequences(X_te_seq, r) if r > 0 \
+                          else (X_te_seq.copy(), None)
+                Xm, _  = simulate_missing_sensors(X_test, r) if r > 0 \
+                          else (X_test.copy(), None)
+                p_t, _ = predict_temporal_nt(tnt, Xsm)
+                tnt_m.append(float(sqrt(mean_squared_error(y_te_seq, p_t))))
+                lstm_m.append(float(sqrt(mean_squared_error(y_te_seq, predict_lstm(lstm, Xsm)))))
+                vnt_m.append(float(sqrt(mean_squared_error(y_test, predict_neural_tree(vnt, Xm)))))
+                rf_m.append(float(sqrt(mean_squared_error(y_test, rf.predict(Xm)))))
 
         fig = go.Figure()
         for name, vals, color, dash in [
-            ("Neural Tree", nt_rmse, "#2196F3", "solid"),
-            ("Random Forest", rf_rmse, "#4CAF50", "dash"),
-            ("Gradient Boosting", gb_rmse, "#FF9800", "dot"),
+            ("Temporal NT (ours)", tnt_m,  "#1565c0", "solid"),
+            ("Vanilla NT",         vnt_m,  "#2e7d32", "dash"),
+            ("LSTM (no dropout)",  lstm_m, "#455a64", "dashdot"),
+            ("Random Forest",      rf_m,   "#bdbdbd", "dot"),
         ]:
-            fig.add_trace(go.Scatter(x=noise_levels, y=vals, name=name,
-                                      line=dict(color=color, width=2.5, dash=dash),
-                                      mode='lines+markers', marker=dict(size=8)))
-        fig.update_layout(xaxis_title="Noise Level (σ)", yaxis_title="Prediction Error (RMSE, cycles)",
-                          height=380, legend=dict(orientation='h', y=-0.2))
+            fig.add_trace(go.Scatter(x=[r*100 for r in miss_ratios], y=vals,
+                                     name=name, line=dict(color=color, width=2.5, dash=dash),
+                                     mode='lines+markers', marker=dict(size=8)))
+        fig.update_layout(xaxis_title="Missing Channels (%)",
+                          yaxis_title="RMSE (cycles)", height=380,
+                          legend=dict(orientation='h', y=-0.22))
         st.plotly_chart(fig, use_container_width=True)
 
-        r1, r2, r3 = st.columns(3)
-        r1.metric("Neural Tree at σ=0.10", f"{nt_rmse[3]:.2f} cycles", delta=f"+{nt_rmse[3]-nt_rmse[0]:.2f} from baseline")
-        r2.metric("Random Forest at σ=0.10", f"{rf_rmse[3]:.2f} cycles", delta=f"+{rf_rmse[3]-rf_rmse[0]:.2f} from baseline")
-        r3.metric("Gradient Boosting at σ=0.10", f"{gb_rmse[3]:.2f} cycles", delta=f"+{gb_rmse[3]-gb_rmse[0]:.2f} from baseline")
-
-        st.markdown("""
-        **What this graph shows:** All three models start at similar accuracy with clean data.
-        As noise increases, Neural Tree degrades slightly faster at high noise levels,
-        but maintains the best accuracy at low-to-moderate noise (σ up to 0.05),
-        which covers the majority of realistic sensor interference scenarios.
-        """)
+        delta_tnt  = tnt_m[3]  - tnt_m[0]
+        delta_lstm = lstm_m[3] - lstm_m[0]
+        delta_vnt  = vnt_m[3]  - vnt_m[0]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("TNT at 30% missing",  f"{tnt_m[3]:.2f}",  f"+{delta_tnt:.2f} from clean")
+        c2.metric("LSTM at 30% missing", f"{lstm_m[3]:.2f}", f"+{delta_lstm:.2f} from clean")
+        c3.metric("VanillaNT at 30%",    f"{vnt_m[3]:.2f}",  f"+{delta_vnt:.2f} from clean")
+        st.success(f"At 30% missing sensors: TNT degrades +{delta_tnt:.1f} cycles "
+                   f"vs LSTM +{delta_lstm:.1f} cycles. Sensor dropout is the key.")
 
     with tab2:
-        st.subheader("Prediction Error vs Percentage of Failed Sensors")
-        st.caption("Each point shows model accuracy when that percentage of sensors have completely stopped working.")
+        st.subheader("RMSE vs Gaussian Noise Level")
+        st.caption("Independent per-timestep noise — LSTM's temporal averaging helps here.")
 
-        missing_ratios = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-        nt_m, rf_m, gb_m = [], [], []
+        sigmas = [0.0, 0.02, 0.05, 0.10, 0.15, 0.20]
+        tnt_n, lstm_n, vnt_n, rf_n = [], [], [], []
 
         with st.spinner("Computing..."):
-            for ratio in missing_ratios:
-                if ratio > 0:
-                    X_m, _ = simulate_missing_sensors(X_test, missing_ratio=ratio)
-                else:
-                    X_m = X_test.copy()
-                nt_m.append(np.sqrt(mean_squared_error(y_test, predict_neural_tree(nt, X_m))))
-                rf_m.append(np.sqrt(mean_squared_error(y_test, rf.predict(X_m))))
-                gb_m.append(np.sqrt(mean_squared_error(y_test, gb.predict(X_m))))
+            for s in sigmas:
+                Xsn = apply_noise_to_sequences(X_te_seq, s) if s > 0 else X_te_seq.copy()
+                Xn  = add_gaussian_noise(X_test, s) if s > 0 else X_test.copy()
+                p_t, _ = predict_temporal_nt(tnt, Xsn)
+                tnt_n.append(float(sqrt(mean_squared_error(y_te_seq, p_t))))
+                lstm_n.append(float(sqrt(mean_squared_error(y_te_seq, predict_lstm(lstm, Xsn)))))
+                vnt_n.append(float(sqrt(mean_squared_error(y_test, predict_neural_tree(vnt, Xn)))))
+                rf_n.append(float(sqrt(mean_squared_error(y_test, rf.predict(Xn)))))
 
         fig2 = go.Figure()
         for name, vals, color, dash in [
-            ("Neural Tree", nt_m, "#2196F3", "solid"),
-            ("Random Forest", rf_m, "#4CAF50", "dash"),
-            ("Gradient Boosting", gb_m, "#FF9800", "dot"),
+            ("Temporal NT (ours)", tnt_n,  "#1565c0", "solid"),
+            ("LSTM (no dropout)",  lstm_n, "#455a64", "dashdot"),
+            ("Vanilla NT",         vnt_n,  "#2e7d32", "dash"),
+            ("Random Forest",      rf_n,   "#bdbdbd", "dot"),
         ]:
-            fig2.add_trace(go.Scatter(x=[r*100 for r in missing_ratios], y=vals,
-                                      name=name, line=dict(color=color, width=2.5, dash=dash),
+            fig2.add_trace(go.Scatter(x=sigmas, y=vals, name=name,
+                                      line=dict(color=color, width=2.5, dash=dash),
                                       mode='lines+markers', marker=dict(size=8)))
-        fig2.update_layout(xaxis_title="Failed Sensors (%)", yaxis_title="Prediction Error (RMSE, cycles)",
-                           height=380, legend=dict(orientation='h', y=-0.2))
+        fig2.update_layout(xaxis_title="Noise σ", yaxis_title="RMSE (cycles)",
+                           height=380, legend=dict(orientation='h', y=-0.22))
         st.plotly_chart(fig2, use_container_width=True)
-
-        r1, r2, r3 = st.columns(3)
-        r1.metric("Neural Tree at 30% missing", f"{nt_m[3]:.2f} cycles", delta=f"+{nt_m[3]-nt_m[0]:.2f}")
-        r2.metric("Random Forest at 30% missing", f"{rf_m[3]:.2f} cycles", delta=f"+{rf_m[3]-rf_m[0]:.2f}")
-        r3.metric("Gradient Boosting at 30% missing", f"{gb_m[3]:.2f} cycles", delta=f"+{gb_m[3]-gb_m[0]:.2f}")
-
-        improvement = rf_m[3] - nt_m[3]
-        st.success(f"""
-        **Key result:** When 30% of sensors fail, Neural Tree's prediction error increases by only
-        {nt_m[3]-nt_m[0]:.1f} cycles from baseline, while Random Forest degrades by {rf_m[3]-rf_m[0]:.1f} cycles.
-        Neural Tree is **{improvement:.1f} cycles more accurate** than Random Forest under this failure scenario.
-        This advantage comes from sensor dropout training, which teaches the model to work with incomplete data.
-        """)
+        st.info("LSTM is more noise-robust because temporal averaging across 30 timesteps "
+                "attenuates independent per-timestep noise. TNT follows a similar trend. "
+                "At realistic noise (σ ≤ 0.05) all models stay within 3 cycles of clean-data performance.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 4: Model Comparison
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "📊 Model Comparison":
-    st.title("📊 Model Performance Comparison")
+    st.title("Model Performance Comparison")
     st.markdown("---")
 
-    # Compute metrics on clean test data
-    m_nt = get_metrics(y_test, predict_neural_tree(nt, X_test))
-    m_rf = get_metrics(y_test, rf.predict(X_test))
-    m_gb = get_metrics(y_test, gb.predict(X_test))
+    m_tnt  = get_metrics(y_te_seq, tnt_pred)
+    m_lstm = get_metrics(y_te_seq, lstm_pred)
+    m_vnt  = get_metrics(y_test,   vnt_pred)
+    m_rf   = get_metrics(y_test,   rf_pred)
 
-    st.subheader("TABLE I: Baseline Results (CMAPSS FD001)")
-    df_metrics = pd.DataFrame({
-        "Neural Tree": m_nt,
-        "Random Forest": m_rf,
-        "Gradient Boosting": m_gb,
+    df_m = pd.DataFrame({
+        "Temporal NT (ours)": m_tnt,
+        "LSTM":               m_lstm,
+        "Vanilla NT":         m_vnt,
+        "Random Forest":      m_rf,
     }).T.round(3)
 
-    # Highlight best values
-    st.dataframe(df_metrics.style.highlight_min(subset=['RMSE','MAE','NASA Score'], color='#c8e6c9')
-                                  .highlight_max(subset=['R²'], color='#c8e6c9'), use_container_width=True)
-    st.caption("Green = best value. NASA Score: lower is better (asymmetric penalty favoring early predictions).")
+    st.subheader("Baseline Metrics — CMAPSS FD001")
+    st.dataframe(
+        df_m.style
+            .highlight_min(subset=['RMSE','MAE','NASA'], color='#c8e6c9')
+            .highlight_max(subset=['R²'],                color='#c8e6c9'),
+        use_container_width=True
+    )
+    st.caption("Sequence models (TNT, LSTM) use 30-cycle input; snapshot models use single-cycle input.")
 
     st.markdown("---")
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("RMSE / MAE Comparison")
-        fig = go.Figure()
-        for metric, color in [("RMSE","#2196F3"), ("MAE","#FF9800")]:
-            fig.add_trace(go.Bar(
-                name=metric,
-                x=["Neural Tree","Random Forest","Gradient Boosting"],
-                y=[m_nt[metric], m_rf[metric], m_gb[metric]],
-                marker_color=color, opacity=0.85
-            ))
-        fig.update_layout(barmode='group', height=350,
-                          yaxis_title="Error (cycles)", legend=dict(orientation='h'))
+        st.subheader("RMSE Comparison")
+        models = ["Temporal NT", "LSTM", "Vanilla NT", "Rnd. Forest"]
+        rmses  = [m_tnt['RMSE'], m_lstm['RMSE'], m_vnt['RMSE'], m_rf['RMSE']]
+        colors = ["#1565c0", "#455a64", "#2e7d32", "#bdbdbd"]
+        fig = go.Figure(go.Bar(x=models, y=rmses, marker_color=colors,
+                               text=[f"{v:.2f}" for v in rmses], textposition='outside'))
+        fig.update_layout(yaxis_title="RMSE (cycles)", height=320,
+                          yaxis=dict(range=[0, max(rmses)*1.2]))
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.subheader("Predicted vs True RUL")
+        st.subheader("True vs Predicted RUL")
         fig2 = go.Figure()
-        preds = {
-            "Neural Tree": predict_neural_tree(nt, X_test),
-            "Random Forest": rf.predict(X_test),
-            "Gradient Boosting": gb.predict(X_test),
-        }
-        for name, pred, color in [
-            ("Neural Tree", preds["Neural Tree"], "#2196F3"),
-            ("Random Forest", preds["Random Forest"], "#4CAF50"),
-            ("Gradient Boosting", preds["Gradient Boosting"], "#FF9800"),
+        for name, preds, yt, color in [
+            ("Temporal NT", tnt_pred, y_te_seq, "#1565c0"),
+            ("LSTM",        lstm_pred, y_te_seq, "#455a64"),
         ]:
-            fig2.add_trace(go.Scatter(x=y_test, y=pred, mode='markers',
-                                      name=name, marker=dict(color=color, size=5, opacity=0.7)))
+            fig2.add_trace(go.Scatter(x=yt, y=preds, mode='markers', name=name,
+                                      marker=dict(color=color, size=5, opacity=0.65)))
         fig2.add_trace(go.Scatter(x=[0,130], y=[0,130], mode='lines',
                                    name='Ideal', line=dict(color='black', dash='dash')))
         fig2.update_layout(xaxis_title="True RUL", yaxis_title="Predicted RUL",
-                           height=350, legend=dict(orientation='h'))
+                           height=320, legend=dict(orientation='h'))
         st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown("---")
-    st.subheader("Prediction Timeline: All Test Engines")
-    fig3 = go.Figure()
-    x = list(range(len(y_test)))
-    fig3.add_trace(go.Scatter(x=x, y=y_test, name="True RUL",
-                               line=dict(color="black", width=2, dash="dash")))
-    for name, pred, color in [
-        ("Neural Tree", preds["Neural Tree"], "#2196F3"),
-        ("Random Forest", preds["Random Forest"], "#4CAF50"),
-    ]:
-        fig3.add_trace(go.Scatter(x=x, y=pred, name=name,
-                                   line=dict(color=color, width=1.5), opacity=0.85))
-    fig3.update_layout(xaxis_title="Test Engine", yaxis_title="RUL (cycles)",
-                       height=320, legend=dict(orientation='h', y=-0.2))
-    st.plotly_chart(fig3, use_container_width=True)
+    st.subheader("Capability Summary")
+    cap_df = pd.DataFrame({
+        "Model":               ["Temporal NT (ours)", "LSTM", "Vanilla NT", "Random Forest"],
+        "Uses Sequences":      ["Yes", "Yes", "No",  "No"],
+        "Sensor Dropout":      ["Yes", "No",  "Yes", "No"],
+        "Uncertainty Output":  ["Yes", "No",  "No",  "No"],
+        "Interpretable":       ["Yes", "No",  "Yes", "Partial"],
+        "RMSE (clean)":        [f"{m_tnt['RMSE']:.2f}", f"{m_lstm['RMSE']:.2f}",
+                                 f"{m_vnt['RMSE']:.2f}", f"{m_rf['RMSE']:.2f}"],
+    })
+    st.dataframe(cap_df.set_index("Model"), use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAGE 5: Results vs Literature
+# PAGE 5: Uncertainty
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "🏆 Results vs Literature":
-    st.title("How We Compare to Published Research")
+elif page == "🎯 Uncertainty":
+    st.title("Calibrated Uncertainty Quantification")
     st.markdown("""
-    CMAPSS FD001 is the most widely benchmarked dataset in engine prognostics research.
-    Below we compare our results against published methods from peer-reviewed papers.
-    Lower RMSE = better accuracy.
+    The Temporal Neural Tree outputs a **prediction interval** for every engine, derived from
+    leaf-level Gaussian parameters trained with negative log-likelihood. A well-calibrated model's
+    predicted standard deviation should track its actual prediction error.
     """)
     st.markdown("---")
 
-    # Literature benchmark table
-    lit = pd.DataFrame([
-        {"Method": "LSTM (Zheng et al., 2017)",          "RMSE": 16.14, "Type": "Deep Learning",   "Explainable": "No"},
-        {"Method": "CNN (Li et al., 2018)",               "RMSE": 12.61, "Type": "Deep Learning",   "Explainable": "No"},
-        {"Method": "Transformer (Wang et al., 2021)",     "RMSE": 13.20, "Type": "Deep Learning",   "Explainable": "No"},
-        {"Method": "DCNN (Babu et al., 2016)",            "RMSE": 18.45, "Type": "Deep Learning",   "Explainable": "No"},
-        {"Method": "SVM (Tran et al., 2012)",             "RMSE": 20.96, "Type": "Classical ML",    "Explainable": "Partial"},
-        {"Method": "Random Forest (baseline)",            "RMSE": 18.07, "Type": "Classical ML",    "Explainable": "Partial"},
-        {"Method": "Gradient Boosting (baseline)",        "RMSE": 18.34, "Type": "Classical ML",    "Explainable": "Partial"},
-        {"Method": "Neural Tree (ours)",                  "RMSE": 17.87, "Type": "Hybrid",          "Explainable": "Yes ✅"},
-    ])
+    errors = np.abs(tnt_pred - y_te_seq)
+    bins = np.percentile(tnt_std, np.linspace(0, 100, 11))
+    bin_idx = np.digitize(tnt_std, bins[1:-1])
+    bin_stds, bin_errs, bin_ns = [], [], []
+    for b in range(10):
+        mask = bin_idx == b
+        if mask.sum() > 2:
+            bin_stds.append(float(tnt_std[mask].mean()))
+            bin_errs.append(float(errors[mask].mean()))
+            bin_ns.append(int(mask.sum()))
 
-    m_nt = get_metrics(y_test, predict_neural_tree(nt, X_test))
-
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("RMSE Comparison: CMAPSS FD001")
-        st.caption("Our Neural Tree achieves competitive RMSE while being the only fully explainable model in this comparison.")
-
-        colors = []
-        for _, row in lit.iterrows():
-            if row["Method"] == "Neural Tree (ours)":
-                colors.append("#1565c0")
-            elif row["Type"] == "Deep Learning":
-                colors.append("#bdbdbd")
-            else:
-                colors.append("#90a4ae")
-
-        fig = go.Figure(go.Bar(
-            x=lit["RMSE"], y=lit["Method"],
-            orientation='h',
-            marker_color=colors,
-            text=[f"{v:.2f}" for v in lit["RMSE"]],
-            textposition='outside',
-        ))
-        fig.add_vline(x=m_nt["RMSE"], line_dash="dash", line_color="#1565c0",
-                      annotation_text="Our model", annotation_position="top right")
-        fig.update_layout(
-            height=380, xaxis_title="RMSE (cycles), lower is better",
-            yaxis=dict(autorange="reversed"),
-            margin=dict(l=10, r=60), xaxis_range=[0, 25],
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(248,249,255,1)'
-        )
+        st.subheader("Calibration: Predicted σ vs Actual Error")
+        lim = max(max(bin_stds), max(bin_errs)) * 1.15
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=[0, lim], y=[0, lim], mode='lines', name='Perfect',
+                                  line=dict(color='black', dash='dash', width=1)))
+        fig.add_trace(go.Scatter(x=bin_stds, y=bin_errs, mode='markers+lines',
+                                  name='TNT', marker=dict(color='#1565c0', size=9),
+                                  line=dict(color='#1565c0', width=2),
+                                  text=[f"n={n}" for n in bin_ns]))
+        fig.update_layout(xaxis_title="Predicted σ (cycles)",
+                          yaxis_title="Mean absolute error (cycles)",
+                          height=340, legend=dict(orientation='h'))
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.subheader("Our Results")
-        for label, val, good in [
-            ("RMSE", f"{m_nt['RMSE']:.3f} cycles", True),
-            ("MAE",  f"{m_nt['MAE']:.3f} cycles",  True),
-            ("R²",   f"{m_nt['R²']:.4f}",           True),
-            ("NASA Score", f"{m_nt['NASA Score']:.0f}", True),
-        ]:
-            st.markdown(f"""
-            <div style="background:#f0f4ff;border-radius:8px;padding:12px 16px;
-                        margin-bottom:8px;border-left:4px solid #1565c0">
-                <div style="font-size:0.75rem;color:#666;text-transform:uppercase;
-                            letter-spacing:1px">{label}</div>
-                <div style="font-size:1.4rem;font-weight:700;color:#1565c0">{val}</div>
-            </div>
-            """, unsafe_allow_html=True)
+        st.subheader("Prediction Intervals (100 Engines)")
+        sorted_idx = np.argsort(y_te_seq)
+        y_sorted   = y_te_seq[sorted_idx]
+        mu_sorted  = tnt_pred[sorted_idx]
+        lo_sorted  = np.maximum(0, mu_sorted - 2*tnt_std[sorted_idx])
+        hi_sorted  = mu_sorted + 2*tnt_std[sorted_idx]
+        x_ax = list(range(len(y_sorted)))
+
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=x_ax + x_ax[::-1],
+            y=list(hi_sorted) + list(lo_sorted[::-1]),
+            fill='toself', fillcolor='rgba(21,101,192,0.15)',
+            line=dict(color='rgba(255,255,255,0)'), name='95% CI'
+        ))
+        fig2.add_trace(go.Scatter(x=x_ax, y=mu_sorted, mode='lines',
+                                   name='Predicted', line=dict(color='#1565c0', width=1.5)))
+        fig2.add_trace(go.Scatter(x=x_ax, y=y_sorted, mode='markers',
+                                   name='True RUL', marker=dict(color='black', size=4)))
+        fig2.update_layout(xaxis_title="Engine (sorted by true RUL)",
+                           yaxis_title="RUL (cycles)", height=340,
+                           legend=dict(orientation='h'))
+        st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown("---")
-
-    st.subheader("What Makes Our Approach Different")
+    coverage = float(np.mean((y_te_seq >= tnt_pred - 2*tnt_std) &
+                              (y_te_seq <= tnt_pred + 2*tnt_std)) * 100)
     c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown("""
-        <div class="nasa-card">
-        <div style="font-size:2rem;margin-bottom:8px">🎯</div>
-        <b>Competitive Accuracy</b><br>
-        <span style="font-size:0.85rem;color:#555">
-        RMSE of 17.87 cycles outperforms classical baselines (SVM: 20.96, DCNN: 18.45)
-        and matches tree-based methods, without sacrificing interpretability.
-        </span>
-        </div>
-        """, unsafe_allow_html=True)
-    with c2:
-        st.markdown("""
-        <div class="nasa-card">
-        <div style="font-size:2rem;margin-bottom:8px">🔍</div>
-        <b>Fully Explainable</b><br>
-        <span style="font-size:0.85rem;color:#555">
-        Unlike LSTM and CNN models, Neural Trees show exactly which sensors
-        drive each prediction. This is essential for FAA certification and safety audits.
-        </span>
-        </div>
-        """, unsafe_allow_html=True)
-    with c3:
-        st.markdown("""
-        <div class="nasa-card">
-        <div style="font-size:2rem;margin-bottom:8px">🛡️</div>
-        <b>Robust to Sensor Failure</b><br>
-        <span style="font-size:0.85rem;color:#555">
-        At 30% missing sensors, Neural Tree RMSE increases by only 2.5 cycles
-        vs Random Forest's 10.5 cycles. That is a 76% better degradation profile.
-        </span>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.caption("Literature values sourced from: Zheng et al. (2017) IJPEDS, Li et al. (2018) Reliability Engineering, Wang et al. (2021) IEEE TII, Babu et al. (2016) IEEE BigData, Tran et al. (2012) AAAI.")
+    c1.metric("95% CI Coverage",  f"{coverage:.1f}%", "target: 95%")
+    c2.metric("Mean predicted σ", f"{tnt_std.mean():.1f} cycles")
+    c3.metric("Mean actual error",f"{errors.mean():.1f} cycles")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 6: Feature Importance
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🔍 Feature Importance":
-    st.title("Feature Importance and Explainability")
+    st.title("Gradient-Based Feature Importance")
     st.markdown("""
-    One of the key advantages of Neural Trees over black-box models is **explainability**.
-    By computing how much each sensor influences the model's output (via input gradients),
-    we can identify which sensors are most critical for predicting engine health.
-    This is essential in safety-critical systems where engineers need to understand *why*
-    a model is raising a maintenance alert.
+    Importance is computed by backpropagating through the full GRU encoder + tree ensemble
+    and measuring mean absolute gradient with respect to each input channel, averaged over
+    all timesteps. No post-hoc approximation — this reflects the model's actual sensitivity.
     """)
     st.markdown("---")
 
-    importance = nt.get_feature_importance(torch.tensor(X_test, dtype=torch.float32))
+    importance = tnt.get_feature_importance(torch.tensor(X_te_seq, dtype=torch.float32))
     imp_df = pd.DataFrame({"Feature": USEFUL_FEATURES, "Importance": importance})
     imp_df = imp_df.sort_values("Importance", ascending=False).reset_index(drop=True)
 
     col1, col2 = st.columns([2, 1])
-
     with col1:
-        st.subheader("All Sensor Importance Scores")
-        st.caption("Higher score = this sensor has more influence on the RUL prediction.")
         fig = go.Figure(go.Bar(
-            x=imp_df["Importance"], y=imp_df["Feature"],
-            orientation='h',
-            marker=dict(color=imp_df["Importance"], colorscale='Blues', showscale=False)
+            x=imp_df["Importance"] * 100, y=imp_df["Feature"], orientation='h',
+            marker=dict(color=imp_df["Importance"]*100, colorscale='Blues', showscale=False)
         ))
-        fig.update_layout(height=420, xaxis_title="Importance Score",
+        fig.update_layout(height=420, xaxis_title="Importance (%)",
                           yaxis=dict(autorange="reversed"), margin=dict(l=60))
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.subheader("Top 5 Most Important Sensors")
-        st.caption("These sensors carry the most information about engine degradation.")
-        st.markdown("")
+        st.subheader("Top 5 Sensors")
         for _, row in imp_df.head(5).iterrows():
             pct = row['Importance'] * 100
             st.markdown(f"**{row['Feature']}**: `{pct:.1f}%`")
             st.progress(float(row['Importance']) / float(imp_df['Importance'].max()))
-            st.markdown("")
         st.markdown("---")
-        st.info("Knowing which sensors matter most allows maintenance teams to prioritize sensor health checks and focus inspections on the most critical components.")
+        st.info("High-pressure turbine sensors (s11, s4, s12) dominate — consistent with "
+                "the known CMAPSS fault mode where HPT components degrade first.")
 
     st.markdown("---")
     st.subheader("Sensor Correlation with RUL")
-    st.caption("How strongly each sensor reading correlates with remaining engine life. Green = sensor value rises as engine life increases. Red = sensor value rises as engine degrades.")
     corr_data = pd.DataFrame(X_train, columns=USEFUL_FEATURES)
     corr_data['RUL'] = y_train
     corr = corr_data.corr()['RUL'].drop('RUL').sort_values()
-
     fig2 = go.Figure(go.Bar(
         x=corr.values, y=corr.index, orientation='h',
         marker_color=['#ef5350' if v < 0 else '#4CAF50' for v in corr.values]
     ))
-    fig2.update_layout(height=380, xaxis_title="Pearson Correlation with RUL",
+    fig2.update_layout(height=380, xaxis_title="Pearson r with RUL",
                        yaxis=dict(autorange="reversed"), margin=dict(l=60))
     st.plotly_chart(fig2, use_container_width=True)

@@ -31,7 +31,7 @@ Standard deep-learning baselines (LSTM) are accurate on clean data but degrade s
 
 ## Dataset
 
-**NASA CMAPSS** — Turbofan Engine Degradation Simulation Dataset  
+**NASA CMAPSS** Turbofan Engine Degradation Simulation Dataset  
 Source: [NASA Prognostics Center of Excellence](https://ti.arc.nasa.gov/tech/dash/groups/pcoe/prognostic-data-repository/)
 
 This project evaluates on the **FD001 subset**:

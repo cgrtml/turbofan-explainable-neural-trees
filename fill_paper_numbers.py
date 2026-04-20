@@ -64,16 +64,7 @@ ph['PH_FD001_LSTM']   = str(base['LSTM']['RMSE'])
 ph['PH_FD001_LSTM_N'] = str(int(base['LSTM']['NASA']))
 ph['PH_FD001_RF']     = str(base['RF']['RMSE'])
 ph['PH_FD001_RF_N']   = str(int(base['RF']['NASA']))
-# FD002-004: use prior run values (not retrained here)
-for ds, tnt_r, lstm_r, rf_r in [('FD002','26.1','27.4','25.8'),
-                                   ('FD003','18.4','18.9','19.2'),
-                                   ('FD004','27.9','28.5','28.0')]:
-    ph[f'PH_{ds}_TNT']    = tnt_r
-    ph[f'PH_{ds}_TNT_N']  = '—'
-    ph[f'PH_{ds}_LSTM']   = lstm_r
-    ph[f'PH_{ds}_LSTM_N'] = '—'
-    ph[f'PH_{ds}_RF']     = rf_r
-    ph[f'PH_{ds}_RF_N']   = '—'
+# FD002-004 removed — paper now evaluates FD001 only
 
 # Calibration correlation placeholder — needs tnt_std/errors; use dummy if not present
 ph['PH_CALIBR'] = '0.91'

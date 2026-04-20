@@ -91,31 +91,51 @@ def get_metrics(y_true, y_pred):
 
 
 # ── Model training (cached) ───────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Training models on NASA CMAPSS FD001...")
+@st.cache_resource(show_spinner="Loading models...")
 def load_models_and_data():
     train_df, test_df = load_cmapss(dataset='FD001', data_dir='data')
     X_train, y_train, X_test, y_test, scaler = prepare_features(train_df, test_df)
     X_tr_seq, y_tr_seq, X_te_seq, y_te_seq, _ = \
         load_cmapss_sequences('FD001', 'data', seq_len=30)
 
-    # Temporal Neural Tree (primary model)
+    base = os.path.dirname(__file__)
+
+    # Temporal Neural Tree — load saved weights or train
     tnt = TemporalNeuralTreeEnsemble(input_dim=17, hidden_dim=64,
                                       gru_layers=2, n_trees=5, depth=5)
-    train_temporal_nt(tnt, X_tr_seq, y_tr_seq, epochs=200,
-                      sensor_dropout=0.1, verbose=False)
+    tnt_path = os.path.join(base, 'tnt_model.pt')
+    if os.path.exists(tnt_path):
+        tnt.load_state_dict(torch.load(tnt_path, map_location='cpu'))
+    else:
+        train_temporal_nt(tnt, X_tr_seq, y_tr_seq, epochs=200,
+                          sensor_dropout=0.1, verbose=False)
+        torch.save(tnt.state_dict(), tnt_path)
+    tnt.eval()
 
-    # Vanilla NT (ablation)
+    # Vanilla NT — load or train
     vnt = NeuralTreeEnsemble(input_dim=17, n_trees=5, depth=5, hidden_dim=32)
-    train_neural_tree(vnt, X_train, y_train, epochs=200,
-                      sensor_dropout=0.1, verbose=False)
+    vnt_path = os.path.join(base, 'vnt_model.pt')
+    if os.path.exists(vnt_path):
+        vnt.load_state_dict(torch.load(vnt_path, map_location='cpu'))
+    else:
+        train_neural_tree(vnt, X_train, y_train, epochs=200,
+                          sensor_dropout=0.1, verbose=False)
+        torch.save(vnt.state_dict(), vnt_path)
+    vnt.eval()
 
-    # LSTM baseline (no sensor dropout)
+    # LSTM — load or train
     lstm = LSTMBaseline(input_dim=17, hidden_dim=64, num_layers=2)
-    train_lstm(lstm, X_tr_seq, y_tr_seq, epochs=150, verbose=False)
+    lstm_path = os.path.join(base, 'lstm_model.pt')
+    if os.path.exists(lstm_path):
+        lstm.load_state_dict(torch.load(lstm_path, map_location='cpu'))
+    else:
+        train_lstm(lstm, X_tr_seq, y_tr_seq, epochs=150, verbose=False)
+        torch.save(lstm.state_dict(), lstm_path)
+    lstm.eval()
 
     # Ensemble baselines
     rf = RandomForestRegressor(n_estimators=200, max_depth=12,
-                                random_state=42, n_jobs=4)
+                                random_state=42, n_jobs=-1)
     rf.fit(X_train, y_train)
     gb = HistGradientBoostingRegressor(max_iter=200, max_depth=5,
                                         learning_rate=0.1, random_state=42)

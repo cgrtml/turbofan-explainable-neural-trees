@@ -1,4 +1,7 @@
-data/
+# data/ — FD001 files tracked below
+!data/train_FD001.txt
+!data/test_FD001.txt
+!data/RUL_FD001.txt
 __pycache__/
 *.pyc
 *.pyo

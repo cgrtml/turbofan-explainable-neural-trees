@@ -83,8 +83,8 @@ paper_path = '/Users/mac/Desktop/turbofan-paper/main.tex'
 with open(paper_path) as f:
     tex = f.read()
 
-for key, val in ph.items():
-    # replace both escaped (\\_) and literal (_) forms
+for key in sorted(ph.keys(), key=len, reverse=True):
+    val = ph[key]
     tex = tex.replace(key.replace('_', '\\_'), val)
     tex = tex.replace(key, val)
 

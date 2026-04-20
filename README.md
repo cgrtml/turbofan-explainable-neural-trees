@@ -4,7 +4,7 @@
 
 **Author:** Cagri Temel / Hezarfen LLC
 
-**Live Demo:** [Streamlit App](https://share.streamlit.io/cgrtml/turbofan-explainable-neural-trees)
+**Live Demo:** [Streamlit App](https://cgrtml-turbofan-explainable-neural-trees-app-wpwpsy.streamlit.app)
 
 ---
 
